@@ -389,12 +389,14 @@
   .review-warn :global(.icon) { margin-top: 2px; }
   .review-list .text-button, .review-identity .text-button { flex-shrink: 0; }
   .master-fallback { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--sunk); overflow-wrap: anywhere; animation: note-in 260ms var(--ease-out) both; }
-  .master-fallback h4 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink); font-size: calc(13.5px * var(--text-scale)); font-weight: 600; }
+  .master-fallback h4 { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: calc(13.5px * var(--text-scale)); font-weight: 600; margin: 0; }
   .master-fallback h4 :global(.icon) { flex-shrink: 0; color: var(--mint); }
   .master-fallback .text-button { justify-self: start; }
   @media (prefers-reduced-motion: reduce) { .master-fallback { animation: none; } }
-  @media (max-width: 520px) {
-    .wizard-steps { padding: 10px 16px 0; }
+  @media (max-width: 599.98px) {
+    .wizard-steps { padding: 12px 16px 4px; gap: 6px 14px; }
     .port-row { grid-template-columns: minmax(0, 1fr); }
+    .review-list li { gap: 10px; padding: 12px 10px 12px 14px; }
+    .review-list .text-button, .review-identity .text-button { min-height: 36px; padding: 0 6px; }
   }
 </style>

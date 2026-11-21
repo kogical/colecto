@@ -8,41 +8,95 @@ import '../../core/widgets/colecto_mark.dart';
 import '../../core/kit/kit.dart';
 import 'mail_controller.dart';
 
-/// Colecto's slim top bar: brand on the left, the command palette trigger
-/// centred, the account switcher and Settings on the right. These are host
-/// controls and do not move.
+/// Colecto's slim top bar: brand on the left, the command trigger centred,
+/// Send approvals (only while one waits) and Settings on the right. Each
+/// design draws it as its own title bar or toolbar. These are host controls
+/// and do not move.
 class ColectoTopBar extends StatelessWidget {
   const ColectoTopBar({
     super.key,
     required this.controller,
     required this.onOpenCommandPalette,
-    required this.onCompose,
-    this.sidebarWidth = 220,
   });
 
   final MailController controller;
   final VoidCallback onOpenCommandPalette;
-  final VoidCallback onCompose;
-
-  /// Lets the macOS toolbar line its title up over the message list.
-  final double sidebarWidth;
 
   @override
   Widget build(BuildContext context) {
-    return switch (colectoPlatformStyle(context)) {
-      ColectoPlatformStyle.fluent => _fluent(context),
-      ColectoPlatformStyle.macos => _macos(context),
-      ColectoPlatformStyle.android => _material(context),
-      ColectoPlatformStyle.ios => _cupertino(context),
-      ColectoPlatformStyle.desktop => _colecto(context),
+    final p = ColectoPalette.of(context);
+    final style = colectoPlatformStyle(context);
+    final c = controller;
+    final (height, color, border, searchShare, searchMax) = switch (style) {
+      ColectoPlatformStyle.fluent => (48.0, p.ground, false, 0.4, 480.0),
+      ColectoPlatformStyle.macos => (52.0, p.float, true, 0.36, 420.0),
+      ColectoPlatformStyle.android => (64.0, p.sunk, false, 0.46, 720.0),
+      ColectoPlatformStyle.ios => (52.0, p.bg, true, 0.4, 480.0),
+      ColectoPlatformStyle.desktop => (46.0, p.ground, true, 0.42, 520.0),
     };
+    return Container(
+      height: height,
+      padding: EdgeInsets.only(
+        // macOS leaves room for the traffic lights.
+        left: style == ColectoPlatformStyle.macos ? 80 : 14,
+        right: 8,
+      ),
+      decoration: BoxDecoration(
+        color: color,
+        border: border
+            ? Border(
+                bottom: BorderSide(
+                  color: p.lineSoft,
+                  width: style == ColectoPlatformStyle.ios ? 0.5 : 1,
+                ),
+              )
+            : null,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final roomy = constraints.maxWidth > 820;
+          return Row(
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _goHome(_lead(context, style, roomy)),
+                ),
+              ),
+              // `grid-template-columns: 1fr minmax(0, 520px) 1fr`.
+              SizedBox(
+                width: (constraints.maxWidth * searchShare).clamp(
+                  180.0,
+                  searchMax,
+                ),
+                child: _CommandTrigger(onTap: onOpenCommandPalette),
+              ),
+              Expanded(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (c.hasUpdateBanner && roomy) ...[
+                      Flexible(child: _UpdateChip(controller: c)),
+                      const SizedBox(width: 6),
+                    ],
+                    if (c.pendingApprovalCount > 0) ...[
+                      Flexible(child: _ApprovalsChip(controller: c)),
+                      const SizedBox(width: 4),
+                    ],
+                    ColectoIconButton(
+                      icon: LucideIcons.slidersHorizontal,
+                      tooltip: 'Settings (${colectoModKey(context)}+,)',
+                      onPressed: () => c.openSettings(),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
-
-  Widget _settingsButton(BuildContext context) => ColectoIconButton(
-    icon: LucideIcons.settings,
-    tooltip: 'Settings (${colectoModKey(context)}+,)',
-    onPressed: () => controller.openSettings(),
-  );
 
   Widget _goHome(Widget child) => ColectoPressable(
     onTap: () {
@@ -55,240 +109,72 @@ class ColectoTopBar extends StatelessWidget {
     builder: (context, s) => child,
   );
 
-  /// Colecto: brand left, the command trigger centred, account and Settings
-  /// right.
-  Widget _colecto(BuildContext context) {
+  /// The brand, as each platform's title bar shows an app's name.
+  Widget _lead(BuildContext context, ColectoPlatformStyle style, bool roomy) {
     final p = ColectoPalette.of(context);
-    final c = controller;
-    return Container(
-      height: 46,
-      padding: const EdgeInsets.only(left: 14, right: 8),
-      decoration: BoxDecoration(
-        color: p.ground,
-        border: Border(bottom: BorderSide(color: p.lineSoft)),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final roomy = constraints.maxWidth > 820;
-          return Row(
-            children: [
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: _goHome(
-                    roomy ? const ColectoBrand() : const ColectoMark(size: 24),
-                  ),
-                ),
-              ),
-              // `grid-template-columns: 1fr minmax(0, 520px) 1fr`.
-              SizedBox(
-                width: (constraints.maxWidth * 0.42).clamp(180.0, 520.0),
-                child: _CommandTrigger(onTap: onOpenCommandPalette),
-              ),
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (c.hasUpdateBanner && roomy) ...[
-                      Flexible(child: _UpdateChip(controller: c)),
-                      const SizedBox(width: 6),
-                    ],
-                    Flexible(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 240),
-                        child: AccountSwitcher(controller: c, showName: roomy),
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    _settingsButton(context),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
+    Widget named(double mark, double gap, TextStyle text) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ColectoMark(size: mark),
+        SizedBox(width: gap),
+        Text('Colecto', style: text),
+      ],
     );
+    return switch (style) {
+      ColectoPlatformStyle.desktop =>
+        roomy ? const ColectoBrand() : const ColectoMark(size: 24),
+      ColectoPlatformStyle.fluent => named(18, 12, kStyle(12, color: p.ink2)),
+      ColectoPlatformStyle.macos => named(
+        18,
+        8,
+        kStyle(13, weight: 700, color: p.ink),
+      ),
+      ColectoPlatformStyle.android => named(28, 12, kStyle(20, color: p.ink)),
+      ColectoPlatformStyle.ios => Text(
+        'Colecto',
+        style: kStyle(17, weight: 600, color: p.ink),
+      ),
+    };
   }
+}
 
-  /// Windows 11 title bar: a small app icon and name on the left, the
-  /// search box centred, the account picture and Settings on the right.
-  Widget _fluent(BuildContext context) {
+/// Shown only while a send waits for the owner's approval.
+class _ApprovalsChip extends StatelessWidget {
+  const _ApprovalsChip({required this.controller});
+
+  final MailController controller;
+
+  @override
+  Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.only(left: 16, right: 8),
-      color: p.ground,
-      child: LayoutBuilder(
-        builder: (context, constraints) => Row(
-          children: [
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _goHome(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const ColectoMark(size: 18),
-                      const SizedBox(width: 12),
-                      Text('Colecto', style: kStyle(12, color: p.ink2)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(
-              width: (constraints.maxWidth * 0.4).clamp(180.0, 480.0),
-              child: _CommandTrigger(onTap: onOpenCommandPalette),
-            ),
-            Expanded(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  AccountSwitcher(controller: controller, showName: false),
-                  _settingsButton(context),
-                ],
-              ),
-            ),
-          ],
+    final n = controller.pendingApprovalCount;
+    return ColectoPressable(
+      onTap: () => controller.openSettings(SettingsSection.sendApprovals),
+      tooltip: n == 1 ? '1 send waits for you' : '$n sends wait for you',
+      focusRadius: colectoRadius(context),
+      builder: (context, s) => AnimatedContainer(
+        duration: ColectoMotion.hover,
+        height: 30,
+        padding: const EdgeInsets.only(left: 9, right: 6),
+        decoration: BoxDecoration(
+          color: s.hovered ? p.raise : p.select,
+          borderRadius: BorderRadius.circular(colectoRadius(context)),
         ),
-      ),
-    );
-  }
-
-  /// macOS unified toolbar: room for the traffic lights over the sidebar,
-  /// the mailbox title and count over the list, actions and search on the
-  /// right.
-  Widget _macos(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    final c = controller;
-    final unread =
-        c.folders.where((f) => f.id == c.activeFolder).firstOrNull?.unread ?? 0;
-    final count = c.threads.length;
-    final subtitle = [
-      count == 1 ? '1 message' : '$count messages',
-      if (unread > 0) '$unread unread',
-    ].join(', ');
-    return Container(
-      height: 52,
-      padding: const EdgeInsets.only(right: 10),
-      decoration: BoxDecoration(
-        color: p.float,
-        border: Border(bottom: BorderSide(color: p.lineSoft)),
-      ),
-      child: Row(
-        children: [
-          SizedBox(width: sidebarWidth + 1),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  c.currentFolderName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: kStyle(13, weight: 700, color: p.ink),
-                ),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: kStyle(11, color: p.ink3),
-                ),
-              ],
-            ),
-          ),
-          ColectoIconButton(
-            icon: LucideIcons.squarePen,
-            tooltip: 'New message (C)',
-            size: 17,
-            onPressed: onCompose,
-          ),
-          const SizedBox(width: 4),
-          SizedBox(
-            width: 220,
-            child: _CommandTrigger(onTap: onOpenCommandPalette),
-          ),
-          const SizedBox(width: 6),
-          AccountSwitcher(controller: c, showName: false),
-          _settingsButton(context),
-        ],
-      ),
-    );
-  }
-
-  /// Material 3 (Gmail on a large screen): the name, a pill search bar and
-  /// the account picture.
-  Widget _material(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    return Container(
-      height: 64,
-      padding: const EdgeInsets.only(left: 20, right: 12),
-      color: p.sunk,
-      child: Row(
-        children: [
-          _goHome(
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const ColectoMark(size: 28),
-                const SizedBox(width: 12),
-                Text('Colecto', style: kStyle(20, color: p.ink)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 48),
-          Flexible(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720),
-              child: _CommandTrigger(onTap: onOpenCommandPalette),
-            ),
-          ),
-          const Spacer(),
-          _settingsButton(context),
-          const SizedBox(width: 4),
-          AccountSwitcher(controller: controller, showName: false),
-        ],
-      ),
-    );
-  }
-
-  /// iPadOS: a quiet bar with the name and the search field.
-  Widget _cupertino(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    return Container(
-      height: 52,
-      padding: const EdgeInsets.only(left: 20, right: 8),
-      decoration: BoxDecoration(
-        color: p.bg,
-        border: Border(bottom: BorderSide(color: p.lineSoft, width: 0.5)),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) => Row(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _goHome(
-                  Text('Colecto', style: kStyle(17, weight: 600, color: p.ink)),
-                ),
+            Icon(LucideIcons.shieldAlert, size: 14, color: p.accent),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                'Send approvals',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: kStyle(12.5, weight: 560, color: p.ink),
               ),
             ),
-            SizedBox(
-              width: (constraints.maxWidth * 0.4).clamp(200.0, 480.0),
-              child: _CommandTrigger(onTap: onOpenCommandPalette),
-            ),
-            Expanded(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  AccountSwitcher(controller: controller, showName: false),
-                  _settingsButton(context),
-                ],
-              ),
-            ),
+            const SizedBox(width: 7),
+            ColectoBadge(text: '$n', accent: true),
           ],
         ),
       ),
@@ -421,10 +307,14 @@ class AccountSwitcher extends StatelessWidget {
     super.key,
     required this.controller,
     this.showName = true,
+    this.expand = false,
   });
 
   final MailController controller;
   final bool showName;
+
+  /// Fills the width of the pane it sits in.
+  final bool expand;
 
   @override
   Widget build(BuildContext context) {
@@ -449,14 +339,14 @@ class AccountSwitcher extends StatelessWidget {
         semanticLabel: 'Current account: ${current?.displayName ?? 'none'}',
         builder: (context, s) => AnimatedContainer(
           duration: ColectoMotion.hover,
-          height: 40,
+          height: expand ? 44 : 40,
           padding: EdgeInsets.only(left: 6, right: showName ? 8 : 6),
           decoration: BoxDecoration(
             color: s.hovered ? p.raise : const Color(0x00000000),
             borderRadius: BorderRadius.circular(7),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
             children: [
               ColectoAvatar(
                 name: current?.displayName ?? '?',
@@ -466,6 +356,7 @@ class AccountSwitcher extends StatelessWidget {
               if (showName) ...[
                 const SizedBox(width: 10),
                 Flexible(
+                  fit: expand ? FlexFit.tight : FlexFit.loose,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -542,7 +433,7 @@ void showAccountMenu(BuildContext anchorContext, MailController c) {
       anchor: colectoRectOf(anchorContext),
       items: items,
       width: 260,
-      alignRight: true,
+      alignRight: !(colectoRectOf(anchorContext).left < 200),
     );
   }
 }

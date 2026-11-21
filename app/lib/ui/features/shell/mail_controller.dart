@@ -133,6 +133,7 @@ class MailController extends ChangeNotifier {
   bool _authRequired = false;
   String? _error;
   SettingsSection? _activeSettings;
+  bool _settingsIndex = false;
   final List<ColectoToast> _toasts = [];
   final Set<int> _heldToasts = {};
   DateTime? _syncedAt;
@@ -283,6 +284,9 @@ class MailController extends ChangeNotifier {
       _nextOffset < maxListOffset;
   String? get error => _error;
   SettingsSection? get activeSettings => _activeSettings;
+
+  /// Whether a phone shows the Settings section list rather than a page.
+  bool get showsSettingsIndex => _settingsIndex;
   List<ColectoToast> get toasts => List.unmodifiable(_toasts);
   DateTime? get syncedAt => _syncedAt;
   ComposeRequest? get compose => _compose;
@@ -379,7 +383,11 @@ class MailController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void openSettings([SettingsSection section = SettingsSection.accounts]) {
+  /// Opens Settings at [section]; with none, phones start at the section
+  /// list (wider windows show Accounts beside it).
+  void openSettings([SettingsSection? section]) {
+    _settingsIndex = section == null;
+    section ??= SettingsSection.accounts;
     _activeSettings = section;
     notifyListeners();
     if (section == SettingsSection.ai) unawaited(loadAiSettings());
@@ -390,6 +398,12 @@ class MailController extends ChangeNotifier {
 
   void closeSettings() {
     _activeSettings = null;
+    notifyListeners();
+  }
+
+  /// Back from a Settings page to the section list (phones).
+  void showSettingsIndex() {
+    _settingsIndex = true;
     notifyListeners();
   }
 

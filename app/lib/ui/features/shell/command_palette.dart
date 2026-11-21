@@ -7,7 +7,7 @@ import '../../core/format/when.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/kit/kit.dart';
 import 'mail_controller.dart';
-import 'sidebar_pane.dart';
+import 'folders.dart';
 
 class _Command {
   const _Command({

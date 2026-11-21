@@ -25,41 +25,36 @@ class MailSettingsTab extends StatelessWidget {
           description: 'How the message list looks and what Colecto keeps ready offline.',
         ),
         ColectoSection(
-          title: 'List density',
-          description:
-              'Full shows a preview line; Compact fits one message per line.',
+          title: 'Message list',
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ColectoSegmented<ListDensity>(
+            ColectoSettingRow(
+              title: 'Density',
+              description:
+                  'Full shows a preview line, Medium is shorter, Compact fits '
+                  'each message on one line.',
+              trailing: ColectoSegmented<ListDensity>(
                 value: prefs.listDensity,
                 options: [for (final d in ListDensity.values) (d, d.label)],
                 onChanged: (d) =>
                     c.updatePreferences(PreferencesPatch(listDensity: d)),
               ),
             ),
-          ],
-        ),
-        ColectoSection(
-          children: [
             ColectoSettingRow(
-              title: 'Group by date',
+              title: 'Date headings',
               description:
-                  'Today, Yesterday, Previous 7 days, then one heading per '
-                  'month.',
+                  'Group messages under Today, Yesterday, Previous 7 days and '
+                  'month names.',
               trailing: ColectoSwitch(
                 value: prefs.dateGroups,
                 onChanged: (v) =>
                     c.updatePreferences(PreferencesPatch(dateGroups: v)),
               ),
             ),
-            const SizedBox(height: 16),
             ColectoSettingRow(
               title: 'Load older messages on scroll',
               description:
-                  'Fetch the next batch automatically when you reach the '
-                  'bottom of the list. When off, a "Load more" link appears '
-                  'instead.',
+                  'Fetch the next batch when you reach the bottom of the '
+                  'list. When off, a "Load more" link appears instead.',
               trailing: ColectoSwitch(
                 value: prefs.autoLoadMore,
                 onChanged: (v) =>
@@ -69,12 +64,14 @@ class MailSettingsTab extends StatelessWidget {
           ],
         ),
         ColectoSection(
+          title: 'Ready to read',
           children: [
             ColectoSettingRow(
-              title: 'Download messages for offline reading',
+              title: 'Download recent mail ahead of time',
               description:
-                  'After each Inbox check, fetch the newest message bodies so '
-                  'they open instantly and work without a connection.',
+                  'After each Inbox check, the newest messages are saved so '
+                  'they open instantly, even offline. This never marks them '
+                  'as read.',
               trailing: ColectoSwitch(
                 value: prefs.prefetch.enabled,
                 onChanged: (v) => c.updatePreferences(
@@ -84,12 +81,13 @@ class MailSettingsTab extends StatelessWidget {
                 ),
               ),
             ),
-            if (prefs.prefetch.enabled) ...[
-              const SizedBox(height: 14),
-              const ColectoLabel('How many messages'),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: ColectoSegmented<int>(
+            if (prefs.prefetch.enabled)
+              ColectoSettingRow(
+                title: 'Messages to keep ready',
+                description:
+                    'The newest messages in your Inbox. More uses more '
+                    'storage and bandwidth.',
+                trailing: ColectoSegmented<int>(
                   value: prefetchSteps.contains(prefs.prefetch.count)
                       ? prefs.prefetch.count
                       : 50,
@@ -101,7 +99,6 @@ class MailSettingsTab extends StatelessWidget {
                   ),
                 ),
               ),
-            ],
           ],
         ),
       ],
@@ -175,11 +172,12 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
           description: 'Theme, colour and type. Changes apply right away.',
         ),
         ColectoSection(
-          title: 'Theme',
+          title: 'Look',
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ColectoSegmented<ThemeMode>(
+            ColectoSettingRow(
+              title: 'Theme',
+              description: 'System follows your device.',
+              trailing: ColectoSegmented<ThemeMode>(
                 value: c.themeMode,
                 options: const [
                   (ThemeMode.system, 'System'),
@@ -189,59 +187,16 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
                 onChanged: c.setThemeMode,
               ),
             ),
-          ],
-        ),
-        ColectoSection(
-          title: colectoTouch(context) ? 'Interface size' : 'Zoom',
-          description: colectoTouch(context)
-              ? 'Make everything on screen bigger or smaller.'
-              : 'Make everything bigger or smaller. ${colectoModKey(context)} +, '
-                    '${colectoModKey(context)} − and ${colectoModKey(context)} 0 '
-                    'work anywhere.',
-          children: [
-            Row(
-              children: [
-                ColectoIconButton(
-                  icon: LucideIcons.minus,
-                  tooltip: 'Zoom out',
-                  onPressed: c.zoom <= 0.5 ? null : c.zoomOut,
-                ),
-                SizedBox(
-                  width: 64,
-                  child: ColectoText(
-                    '${(c.zoom * 100).round()}%',
-                    role: ColectoTextRole.bodyStrong,
-                    align: TextAlign.center,
-                  ),
-                ),
-                ColectoIconButton(
-                  icon: LucideIcons.plus,
-                  tooltip: 'Zoom in',
-                  onPressed: c.zoom >= 2 ? null : c.zoomIn,
-                ),
-                const SizedBox(width: 8),
-                ColectoButton(
-                  label: 'Reset',
-                  variant: ColectoButtonVariant.ghost,
-                  onPressed: c.zoom == 1 ? null : c.resetZoom,
-                ),
-              ],
-            ),
-          ],
-        ),
-        ColectoSection(
-          title: 'Design',
-          description: c.designForcedByLaunch
-              ? 'Set by COLECTO_DESIGN for this launch. Your choice here is '
-                    'saved and used next time.'
-              : 'Each platform gets its own controls by default, but any '
-                    'design works anywhere: pick the one you like.',
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ColectoSelect<ColectoPlatformStyle>(
+            ColectoSettingRow(
+              title: 'Design',
+              description: c.designForcedByLaunch
+                  ? 'Set by COLECTO_DESIGN for this launch. Your choice here '
+                        'is saved and used next time.'
+                  : 'Each platform gets its own controls by default, but any '
+                        'design works anywhere.',
+              trailing: ColectoSelect<ColectoPlatformStyle>(
                 value: c.design,
-                minWidth: 260,
+                minWidth: 240,
                 options: [
                   for (final d in ColectoPlatformStyle.values)
                     (
@@ -252,6 +207,42 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
                     ),
                 ],
                 onChanged: c.setDesign,
+              ),
+            ),
+            ColectoSettingRow(
+              title: colectoTouch(context) ? 'Interface size' : 'Zoom',
+              description: colectoTouch(context)
+                  ? 'Make everything on screen bigger or smaller.'
+                  : 'Make everything bigger or smaller. ${colectoModKey(context)} +, ${colectoModKey(context)} − '
+                        'and ${colectoModKey(context)} 0 work anywhere.',
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ColectoIconButton(
+                    icon: LucideIcons.minus,
+                    tooltip: 'Zoom out',
+                    onPressed: c.zoom <= 0.5 ? null : c.zoomOut,
+                  ),
+                  SizedBox(
+                    width: 56,
+                    child: ColectoText(
+                      '${(c.zoom * 100).round()}%',
+                      role: ColectoTextRole.bodyStrong,
+                      align: TextAlign.center,
+                    ),
+                  ),
+                  ColectoIconButton(
+                    icon: LucideIcons.plus,
+                    tooltip: 'Zoom in',
+                    onPressed: c.zoom >= 2 ? null : c.zoomIn,
+                  ),
+                  const SizedBox(width: 4),
+                  ColectoButton(
+                    label: 'Reset',
+                    variant: ColectoButtonVariant.ghost,
+                    onPressed: c.zoom == 1 ? null : c.resetZoom,
+                  ),
+                ],
               ),
             ),
           ],
@@ -326,23 +317,25 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
           ],
         ),
         ColectoSection(
-          title: 'Typeface',
+          title: 'Text',
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ColectoSelect<String>(
+            ColectoSettingRow(
+              title: 'Font',
+              description:
+                  'Bundled fonts work offline on every device. Platform '
+                  'default uses your system’s interface font.',
+              trailing: ColectoSelect<String>(
                 value: prefs.font ?? '',
-                minWidth: 260,
+                minWidth: 240,
                 options: _fonts,
                 onChanged: (f) =>
                     c.updatePreferences(PreferencesPatch(font: f)),
               ),
             ),
-            const SizedBox(height: 16),
-            const ColectoLabel('Text size'),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ColectoSegmented<int>(
+            ColectoSettingRow(
+              title: 'Text size',
+              description: 'Scales text across the app. Spacing stays compact.',
+              trailing: ColectoSegmented<int>(
                 value: (prefs.fontSize ?? 14).clamp(13, 16),
                 options: const [(13, '13'), (14, '14'), (15, '15'), (16, '16')],
                 onChanged: (v) =>
@@ -376,23 +369,14 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
   }
 
   Widget _spacing(String label, int value, TextSpacing Function(int) next) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 16,
-        runSpacing: 6,
-        children: [
-          SizedBox(width: 120, child: ColectoText(label)),
-          ColectoSegmented<int>(
-            value: value,
-            options: const [(0, 'Normal'), (1, 'More'), (2, 'Most')],
-            onChanged: (v) => widget.controller.updatePreferences(
-              PreferencesPatch(textSpacing: next(v)),
-            ),
-          ),
-        ],
+    return ColectoSettingRow(
+      title: label,
+      trailing: ColectoSegmented<int>(
+        value: value,
+        options: const [(0, 'Normal'), (1, 'More'), (2, 'Most')],
+        onChanged: (v) => widget.controller.updatePreferences(
+          PreferencesPatch(textSpacing: next(v)),
+        ),
       ),
     );
   }

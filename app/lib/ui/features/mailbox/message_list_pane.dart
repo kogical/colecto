@@ -10,10 +10,11 @@ import '../../../domain/models/preferences_models.dart';
 import '../../core/format/when.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/kit/kit.dart';
+import '../shell/folders.dart';
 import '../shell/mail_controller.dart';
 
-/// Colecto's mail pane: search with Compose beside it, label filter chips,
-/// the mailbox list and its status footer. The list adapts to its own
+/// Colecto's mail pane: search with Compose beside it, folder tabs, label
+/// filter chips, the mailbox list and its status footer. The list adapts to its own
 /// width, not the window's: in a wide pane rows become single lines.
 class MessageListPane extends StatefulWidget {
   const MessageListPane({
@@ -25,6 +26,7 @@ class MessageListPane extends StatefulWidget {
     this.onCompose,
     this.headerSlivers = const [],
     this.phone = false,
+    this.folderTabs = false,
   });
 
   final MailController controller;
@@ -38,6 +40,10 @@ class MessageListPane extends StatefulWidget {
   /// Native navigation bars (phones) scroll with the list.
   final List<Widget> headerSlivers;
   final bool phone;
+
+  /// Inbox, Drafts and Sent as tabs under search, with every other folder
+  /// under More (phones show them in the bottom bar instead).
+  final bool folderTabs;
 
   @override
   State<MessageListPane> createState() => _MessageListPaneState();
@@ -138,6 +144,7 @@ class _MessageListPaneState extends State<MessageListPane> {
       slivers: [
         ...widget.headerSlivers,
         SliverToBoxAdapter(child: _head(p, isDrafts)),
+        if (widget.folderTabs) SliverToBoxAdapter(child: _FolderTabs(c)),
         if (!isDrafts) SliverToBoxAdapter(child: _labelBar(p)),
         if (c.bulkSelectedIds.isNotEmpty)
           SliverToBoxAdapter(child: _bulkBar(p)),
@@ -1504,6 +1511,158 @@ class _ListSkeleton extends StatelessWidget {
           ColectoSkeleton(lines: 3),
         ],
       ),
+    );
+  }
+}
+
+/// Colecto's folder tabs: Inbox, Drafts and Sent with their icons and
+/// counts, the active one raised. Every other folder (and one that is open)
+/// sits under More, like the favourites bar in a mail app.
+class _FolderTabs extends StatelessWidget {
+  const _FolderTabs(this.c);
+
+  final MailController c;
+
+  @override
+  Widget build(BuildContext context) {
+    final tabs = primaryFolders(c.folders);
+    final rest = [
+      for (final f in c.folders)
+        if (!tabs.contains(f)) f,
+    ];
+    final open = rest.where((f) => f.id == c.activeFolder).firstOrNull;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+      child: Row(
+        spacing: 2,
+        children: [
+          for (final f in [...tabs, ?open])
+            _FolderTab(
+              icon: folderIcon(f.role),
+              label: f.name,
+              count: f.unread > 0
+                  ? f.unread
+                  : (f.role == FolderRole.drafts ? f.total : 0),
+              selected: f.id == c.activeFolder && c.activeLabel == null,
+              onTap: () => c.selectFolder(f.id),
+              onMenu: (pos) => showColectoContextMenu(
+                context: context,
+                globalPosition: pos,
+                title: f.name,
+                items: [
+                  ColectoMenuItem(
+                    label: 'Check for new mail',
+                    icon: LucideIcons.refreshCw,
+                    onSelected: () async {
+                      await c.selectFolder(f.id);
+                      await c.loadMailbox(refresh: true);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          if (rest.isNotEmpty)
+            Builder(
+              builder: (ctx) => _FolderTab(
+                icon: LucideIcons.ellipsis,
+                label: 'More',
+                iconOnly: true,
+                selected: false,
+                onTap: () => showColectoMenu(
+                  context: ctx,
+                  anchor: colectoRectOf(ctx),
+                  width: 200,
+                  items: [
+                    for (final f in rest)
+                      ColectoMenuItem(
+                        label: f.name,
+                        icon: folderIcon(f.role),
+                        checked: f.id == c.activeFolder,
+                        onSelected: () => c.selectFolder(f.id),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FolderTab extends StatelessWidget {
+  const _FolderTab({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.count = 0,
+    this.iconOnly = false,
+    this.onMenu,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final int count;
+  final bool iconOnly;
+  final ValueChanged<Offset>? onMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    final style = colectoPlatformStyle(context);
+    final material = style == ColectoPlatformStyle.android;
+    final touch = colectoTouch(context);
+    final radius = material ? 16.0 : colectoRadius(context);
+    return ColectoPressable(
+      onTap: onTap,
+      onSecondaryTapDown: onMenu,
+      selected: selected,
+      tooltip: iconOnly ? label : null,
+      semanticLabel: count > 0 ? '$label, $count' : label,
+      focusRadius: radius,
+      builder: (context, s) {
+        final fg = selected || s.hovered ? p.ink : p.ink2;
+        return AnimatedContainer(
+          duration: ColectoMotion.hover,
+          height: touch ? 36 : 30,
+          padding: EdgeInsets.symmetric(horizontal: iconOnly ? 8 : 10),
+          decoration: BoxDecoration(
+            color: selected
+                ? (material ? p.select : p.raise)
+                : s.hovered
+                ? p.ink.withValues(alpha: 0.05)
+                : const Color(0x00000000),
+            borderRadius: BorderRadius.circular(radius),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 15,
+                color: selected
+                    ? (material ? p.accentHi : p.accent)
+                    : (s.hovered ? p.ink2 : p.ink3),
+              ),
+              if (!iconOnly) ...[
+                const SizedBox(width: 7),
+                Text(
+                  label,
+                  style: kStyle(13, weight: selected ? 600 : 520, color: fg),
+                ),
+              ],
+              if (count > 0) ...[
+                const SizedBox(width: 7),
+                ColectoBadge(text: countLabel(count)),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

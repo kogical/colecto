@@ -96,6 +96,22 @@ void main() {
       },
     );
 
+    testWidgets('macOS Design select opens and switches back', (tester) async {
+      final c = await pumpColectoApp(
+        tester,
+        size: const Size(1280, 800),
+        design: ColectoPlatformStyle.macos,
+      );
+      c.openSettings(SettingsSection.appearance);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(ColectoPlatformStyle.macos.label).first);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text(ColectoPlatformStyle.fluent.label).last);
+      await tester.pumpAndSettle();
+      expect(c.design, ColectoPlatformStyle.fluent);
+    });
+
     testWidgets('whole-interface zoom scales inner MediaQuery size', (
       tester,
     ) async {

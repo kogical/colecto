@@ -1,6 +1,12 @@
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:fluent_ui/fluent_ui.dart' show FluentLocalizations;
 import 'package:flutter/foundation.dart';
+// macos_ui still looks up the legacy `package:flutter/material.dart`
+// `MaterialLocalizations`, a different type from material_ui's.
+// ignore: deprecated_member_use
+import 'package:flutter/material.dart'
+    as legacy
+    show DefaultMaterialLocalizations;
 import 'package:material_ui/material_ui.dart';
 
 import 'ui/core/kit/kit.dart';
@@ -55,8 +61,13 @@ class ColectoApp extends StatelessWidget {
         Widget app(ColorScheme? light, ColorScheme? dark) => MaterialApp(
           title: 'Colecto',
           debugShowCheckedModeBanner: false,
-          // Fluent widgets (ComboBox, dialogs) need their own strings.
-          localizationsDelegates: const [FluentLocalizations.delegate],
+          // Fluent widgets (ComboBox, dialogs) need their own strings;
+          // macOS popups (MacosPopupButton) throw without the legacy
+          // Material ones, so the Design select couldn't open.
+          localizationsDelegates: const [
+            FluentLocalizations.delegate,
+            legacy.DefaultMaterialLocalizations.delegate,
+          ],
           themeMode: controller.themeMode,
           themeAnimationDuration: const Duration(milliseconds: 160),
           scrollBehavior: style.pointer

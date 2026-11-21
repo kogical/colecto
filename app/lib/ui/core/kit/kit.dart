@@ -17,6 +17,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:fluent_ui/fluent_ui.dart' as fl;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:macos_ui/macos_ui.dart' as mac;

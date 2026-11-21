@@ -96,7 +96,46 @@ void main() {
       c.closeSettings();
       await tester.pumpAndSettle();
       expect(c.activeSettings, isNull);
+
+      // Settings is a real modal route: Escape dismisses it and the
+      // controller hears about it.
+      c.openSettings();
+      await tester.pumpAndSettle();
+      expect(find.text('Appearance'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(c.activeSettings, isNull);
+      expect(find.text('Appearance'), findsNothing);
     });
+
+    testWidgets(
+      'phone Settings starts at the section list and goes back to it',
+      (tester) async {
+        final c = await pumpColectoApp(
+          tester,
+          size: const Size(390, 844),
+          design: ColectoPlatformStyle.ios,
+        );
+        c.openSettings();
+        await tester.pumpAndSettle();
+        expect(c.showsSettingsIndex, isTrue);
+
+        await tester.tap(find.text('Appearance'));
+        await tester.pumpAndSettle();
+        expect(c.activeSettings, SettingsSection.appearance);
+        expect(find.text('Theme'), findsOneWidget);
+
+        // Back leads to the list, not out of Settings.
+        await tester.tap(find.text('Settings'));
+        await tester.pumpAndSettle();
+        expect(c.showsSettingsIndex, isTrue);
+        expect(c.activeSettings, isNotNull);
+
+        await tester.tap(find.text('Done'));
+        await tester.pumpAndSettle();
+        expect(c.activeSettings, isNull);
+      },
+    );
 
     testWidgets('phones get a native list with a bottom folder bar', (
       tester,

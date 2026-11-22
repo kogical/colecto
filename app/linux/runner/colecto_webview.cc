@@ -9,7 +9,7 @@ static constexpr const char* kChannelName = "com.kogical.colecto/webview";
 
 struct _ColectoWebViewHost {
   FlMethodChannel* channel;
-  GtkFixed* overlay_fixed;
+  GtkOverlay* overlay;
   WebKitWebView* webview;
   int x;
   int y;
@@ -74,13 +74,18 @@ static void ensure_webview(ColectoWebViewHost* host) {
   webkit_settings_set_enable_write_console_messages_to_stdout(settings, FALSE);
   webkit_settings_set_enable_html5_database(settings, FALSE);
   webkit_settings_set_enable_html5_local_storage(settings, FALSE);
+  webkit_settings_set_hardware_acceleration_policy(
+      settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
 
   host->webview = WEBKIT_WEB_VIEW(g_object_new(
       WEBKIT_TYPE_WEB_VIEW, "web-context", context, "settings", settings,
       nullptr));
   g_signal_connect(host->webview, "decide-policy",
                    G_CALLBACK(on_decide_policy), host);
-  gtk_fixed_put(host->overlay_fixed, GTK_WIDGET(host->webview), 0, 0);
+  GtkWidget* widget = GTK_WIDGET(host->webview);
+  gtk_widget_set_halign(widget, GTK_ALIGN_START);
+  gtk_widget_set_valign(widget, GTK_ALIGN_START);
+  gtk_overlay_add_overlay(host->overlay, widget);
 }
 
 static void destroy_webview(ColectoWebViewHost* host) {
@@ -104,9 +109,11 @@ static void apply_geometry(ColectoWebViewHost* host, int x, int y, int width,
     gtk_widget_hide(widget);
     return;
   }
-  gtk_fixed_move(host->overlay_fixed, widget, x, y);
+  gtk_widget_set_margin_start(widget, x > 0 ? x : 0);
+  gtk_widget_set_margin_top(widget, y > 0 ? y : 0);
   gtk_widget_set_size_request(widget, width, height);
   gtk_widget_show(widget);
+  gtk_widget_queue_draw(widget);
 }
 
 static int get_int_arg(FlValue* args, const char* key, int fallback = 0) {
@@ -199,9 +206,9 @@ static void method_call_cb(FlMethodChannel* /*channel*/,
 }
 
 ColectoWebViewHost* colecto_webview_host_new(FlView* view,
-                                             GtkFixed* overlay_fixed) {
+                                             GtkOverlay* overlay) {
   auto* host = g_new0(ColectoWebViewHost, 1);
-  host->overlay_fixed = overlay_fixed;
+  host->overlay = overlay;
 
   FlEngine* engine = fl_view_get_engine(view);
   FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);

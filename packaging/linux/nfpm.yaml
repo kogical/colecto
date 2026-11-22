@@ -13,6 +13,7 @@ overrides:
   deb:
     depends:
       - libgtk-3-0
+      - libwebkit2gtk-4.1-0
       - libglib2.0-0
       - libepoxy0
       - libssl3
@@ -23,6 +24,7 @@ overrides:
   rpm:
     depends:
       - gtk3
+      - webkit2gtk4.1
       - libepoxy
       - openssl-libs
       - dbus-libs

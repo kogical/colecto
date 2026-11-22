@@ -29,6 +29,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       flutter: ${{ steps.filter.outputs.flutter }}
+      webview: ${{ steps.filter.outputs.webview }}
       docker: ${{ steps.filter.outputs.docker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,8 +50,12 @@ jobs:
               - '.github/workflows/ci.yml'
             flutter:
               - 'app/**'
+              - 'packages/**'
               - 'scripts/just/**'
               - 'justfile'
+              - '.github/workflows/ci.yml'
+            webview:
+              - 'packages/kogi_webview/**'
               - '.github/workflows/ci.yml'
             docker:
               - 'Dockerfile'
@@ -136,7 +141,7 @@ jobs:
 
       # Fail fast on Dart formatting before restoring pub cache or running builds.
       - name: Check Dart formatting
-        run: cd app && dart format --output=none --set-exit-if-changed .
+        run: dart format --output=none --set-exit-if-changed app packages
 
       - name: Restore Pub packages
         id: pub-cache
@@ -166,6 +171,9 @@ jobs:
       - name: Test Flutter app (multi-worker)
         run: cd app && flutter test --concurrency=$(nproc) --reporter=expanded
 
+      - name: Test kogi_webview package
+        run: cd packages/kogi_webview && flutter test --concurrency=$(nproc)
+
       - name: Restore cached Flutter Web bundle
         id: web-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -194,6 +202,48 @@ jobs:
           name: colecto-web
           path: dist/colecto-web.tar.zst
           compression-level: 0
+          retention-days: 14
+
+  # Pixel check that the Linux HTML WebView really shows through Flutter on
+  # Wayland (Xvfb/X11 cannot catch Flutter's Wayland subsurface hiding it).
+  webview:
+    name: Linux WebView (Wayland)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.webview == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install GTK, WebKitGTK and Weston
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev \
+            weston imagemagick
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build the kogi_webview example in smoke mode
+        working-directory: packages/kogi_webview/example
+        run: flutter build linux --release --dart-define=KOGI_SMOKE=true
+
+      - name: Wayland pixel smoke test
+        working-directory: packages/kogi_webview
+        run: tool/wayland_smoke.sh example/build/linux/x64/release/bundle/kogi_webview_example kogi-webview-smoke.png
+
+      - name: Upload smoke screenshot
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kogi-webview-smoke
+          path: packages/kogi_webview/kogi-webview-smoke.png
+          if-no-files-found: ignore
           retention-days: 14
 
   docker:

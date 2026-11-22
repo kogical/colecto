@@ -10,7 +10,7 @@ How to build, run and check Colecto from a checkout. For how the pieces fit toge
 - Flutter (stable channel) with Dart
 - [`just`](https://just.systems)
 - On Linux: OpenSSL and D-Bus development libraries, pkg-config, and Flutter Linux desktop
-  build dependencies (on Debian/Ubuntu: `libssl-dev libdbus-1-dev pkg-config clang cmake ninja-build libgtk-3-dev liblzma-dev`)
+  build dependencies (on Debian/Ubuntu: `libssl-dev libdbus-1-dev pkg-config clang cmake ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev liblzma-dev`)
 
 ```sh
 just install        # Fetch Rust crates and Flutter packages

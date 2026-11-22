@@ -11,6 +11,7 @@ justfile
 just
 docs
 app
+packages
 target
 dist
 *.db

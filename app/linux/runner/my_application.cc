@@ -2,13 +2,11 @@
 
 #include <flutter_linux/flutter_linux.h>
 
-#include "colecto_webview.h"
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
-  ColectoWebViewHost* webview_host;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -70,6 +68,8 @@ static void my_application_activate(GApplication* application) {
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
 
+  // kogi_webview composites HTML email views under the FlView, inside this
+  // overlay (packages/kogi_webview/README.md).
   GtkOverlay* overlay = GTK_OVERLAY(gtk_overlay_new());
   gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(view));
   gtk_widget_show(GTK_WIDGET(overlay));
@@ -82,7 +82,6 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
-  self->webview_host = colecto_webview_host_new(view, overlay);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -129,7 +128,6 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
-  g_clear_pointer(&self->webview_host, colecto_webview_host_dispose);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }

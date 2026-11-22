@@ -103,19 +103,22 @@ class _ReaderPaneState extends State<ReaderPane> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final narrow = constraints.maxWidth < 560;
-          final side = narrow ? 18.0 : 40.0;
+          final side = narrow ? 14.0 : 24.0;
           final frameHeight = (constraints.maxHeight - 112).clamp(
             320.0,
             double.infinity,
           );
-          return Stack(
+          // The toolbar sits above the scroll view, not over it: content
+          // scrolls out of sight at its edge instead of underneath it, and an
+          // HTML body (a native view on Linux) is clipped to the viewport.
+          return Column(
             children: [
-              Positioned.fill(
+              _toolbar(p, latest, latestContent, allIds, narrow: narrow),
+              Expanded(
                 child: Scrollbar(
                   controller: _scroll,
                   child: SingleChildScrollView(
                     controller: _scroll,
-                    padding: EdgeInsets.only(top: _toolbarHeight),
                     child: Center(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 780),
@@ -139,18 +142,6 @@ class _ReaderPaneState extends State<ReaderPane> {
                       ),
                     ),
                   ),
-                ),
-              ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: _toolbar(
-                  p,
-                  latest,
-                  latestContent,
-                  allIds,
-                  narrow: narrow,
                 ),
               ),
             ],
@@ -195,7 +186,7 @@ class _ReaderPaneState extends State<ReaderPane> {
         right: narrow ? 6 : 12,
       ),
       decoration: BoxDecoration(
-        color: p.bg.withValues(alpha: 0.96),
+        color: p.bg,
         border: Border(bottom: BorderSide(color: p.lineSoft)),
       ),
       child: Row(
@@ -751,6 +742,7 @@ class _ReaderPaneState extends State<ReaderPane> {
               html: html,
               plainTextFallback: text,
               height: frameHeight,
+              allowRemoteContent: c.remoteContentAllowed(m.id),
             )
           else
             Align(

@@ -10,5 +10,6 @@ Widget? buildPlatformSandboxedWebView({
   required String bg,
   required double height,
   required Widget fallback,
+  bool allowRemoteContent = false,
   ValueChanged<String>? onOpenUrl,
 }) => null;

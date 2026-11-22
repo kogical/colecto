@@ -1,3 +1,4 @@
+import 'package:kogi_webview/kogi_webview.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -107,14 +108,18 @@ class _ToastOverlayState extends State<ToastOverlay> {
     final pad = MediaQuery.paddingOf(context);
     final items = [
       for (final t in _shown)
-        _ToastCard(
+        // Toasts can float over an HTML email; on Linux that is a native
+        // WebKit view, so mark them to keep their clicks in Flutter.
+        KogiWebViewOccluder(
           key: ValueKey(t.id),
-          toast: t,
-          enter: _enter,
-          leaving: _leaving.contains(t.id),
-          onGone: () => _gone(t.id),
-          onDismiss: () => widget.onDismiss(t.id),
-          onHold: (hold) => widget.onHold(t.id, hold),
+          child: _ToastCard(
+            toast: t,
+            enter: _enter,
+            leaving: _leaving.contains(t.id),
+            onGone: () => _gone(t.id),
+            onDismiss: () => widget.onDismiss(t.id),
+            onHold: (hold) => widget.onHold(t.id, hold),
+          ),
         ),
     ];
     return Align(
@@ -145,7 +150,6 @@ class _ToastOverlayState extends State<ToastOverlay> {
 
 class _ToastCard extends StatefulWidget {
   const _ToastCard({
-    super.key,
     required this.toast,
     required this.enter,
     required this.leaving,

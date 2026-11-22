@@ -21,6 +21,7 @@ mailparse = "0.16"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "native-tls"] }
 ammonia = "4"
+markup5ever = "0.40"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 zeroize = { version = "1", features = ["derive"] }

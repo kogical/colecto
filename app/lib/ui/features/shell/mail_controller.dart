@@ -1212,6 +1212,13 @@ class MailController extends ChangeNotifier {
     unawaited(selectThread(list[nextIdx]));
   }
 
+  /// Messages the owner asked to load remote images for in this session.
+  final Set<String> _remoteImagesFor = {};
+
+  /// Whether a message may load remote content (images) when shown.
+  bool remoteContentAllowed(String messageId) =>
+      _preferences.remoteImages || _remoteImagesFor.contains(messageId);
+
   Future<void> loadMessageContent(
     String messageId, {
     bool? remoteImages,
@@ -1232,6 +1239,7 @@ class MailController extends ChangeNotifier {
         remoteImages: remoteImages,
       );
       if (account != _activeAccount) return;
+      if (remoteImages == true) _remoteImagesFor.add(messageId);
       _contentCache.remove(messageId);
       _contentCache[messageId] = content;
       while (_contentCache.length > _maxContentCache) {

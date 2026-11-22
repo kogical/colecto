@@ -155,8 +155,201 @@ const SAFE_STYLE_PROPERTIES: &[&str] = &[
     "direction",
 ];
 
+fn strip_css_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let bytes = css.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+        } else {
+            let ch = css[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+/// Sanitize an extracted `<style>` stylesheet so corporate email layouts
+/// (`.preheader { display: none }`, `@media` queries, table/button classes)
+/// render accurately inside a sandboxed WebView/iframe while preventing
+/// remote resource fetches, tag breakouts, or viewport hijacking.
+fn sanitize_stylesheet(raw_css: &str) -> String {
+    // Remove comments, backslashes (escape smuggling), and angle brackets (tag breakouts).
+    let no_comments = strip_css_comments(raw_css);
+    let cleaned: String = no_comments
+        .chars()
+        .filter(|&c| !matches!(c, '\\' | '<' | '>'))
+        .collect();
+
+    let mut out = String::with_capacity(cleaned.len());
+    let mut rest = cleaned.as_str();
+    while !rest.is_empty() {
+        let trimmed = rest.trim_start();
+        if trimmed.is_empty() {
+            break;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        // Drop @import, @charset, @namespace (terminated by `;` or newline).
+        if lower.starts_with("@import")
+            || lower.starts_with("@charset")
+            || lower.starts_with("@namespace")
+        {
+            if let Some(semi) = trimmed.find(';') {
+                rest = &trimmed[semi + 1..];
+            } else {
+                break;
+            }
+            continue;
+        }
+        // Drop @font-face blocks (remote font fetches).
+        if lower.starts_with("@font-face") {
+            if let Some(open) = trimmed.find('{') {
+                let mut depth = 0usize;
+                let mut end = trimmed.len();
+                for (idx, ch) in trimmed[open..].char_indices() {
+                    if ch == '{' {
+                        depth += 1;
+                    } else if ch == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + idx + 1;
+                            break;
+                        }
+                    }
+                }
+                rest = &trimmed[end..];
+            } else {
+                break;
+            }
+            continue;
+        }
+
+        // Preserve @media blocks by recursively sanitizing their inner rules.
+        if lower.starts_with("@media") {
+            if let Some(open) = trimmed.find('{') {
+                let header = trimmed[..open].trim();
+                let mut depth = 0usize;
+                let mut end = trimmed.len();
+                for (idx, ch) in trimmed[open..].char_indices() {
+                    if ch == '{' {
+                        depth += 1;
+                    } else if ch == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + idx + 1;
+                            break;
+                        }
+                    }
+                }
+                let inner = &trimmed[open + 1..end.saturating_sub(1)];
+                let safe_inner = sanitize_stylesheet(inner);
+                if !safe_inner.is_empty() {
+                    out.push_str(header);
+                    out.push('{');
+                    out.push_str(&safe_inner);
+                    out.push('}');
+                }
+                rest = &trimmed[end..];
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        // Regular CSS rule: `selector { declarations }`
+        let Some(open) = trimmed.find('{') else {
+            break;
+        };
+        let Some(rel_close) = trimmed[open + 1..].find('}') else {
+            break;
+        };
+        let close = open + 1 + rel_close;
+        let selector = trimmed[..open].trim();
+        let body = &trimmed[open + 1..close];
+        rest = &trimmed[close + 1..];
+
+        if selector.is_empty() || selector.starts_with('@') {
+            continue;
+        }
+        let targets_root = selector.split(',').any(|s| {
+            let s = s.trim().to_ascii_lowercase();
+            s == "body" || s == "html"
+        });
+
+        let mut safe_decls = Vec::new();
+        for decl in body.split(';') {
+            let decl = decl.trim();
+            if decl.is_empty() {
+                continue;
+            }
+            let Some((prop, val)) = decl.split_once(':') else {
+                continue;
+            };
+            let prop_l = prop.trim().to_ascii_lowercase();
+            let val_l = val.trim().to_ascii_lowercase();
+            // Reject any URL / script / overlay / remote-fetch constructs.
+            if val_l.contains("url(")
+                || val_l.contains("image-set(")
+                || val_l.contains("expression(")
+                || prop_l == "behavior"
+                || prop_l == "-moz-binding"
+                || prop_l == "content"
+                || prop_l == "background-image"
+                || (prop_l == "position" && (val_l.contains("fixed") || val_l.contains("sticky")))
+            {
+                continue;
+            }
+            if targets_root
+                && ((prop_l == "display" && val_l.contains("none"))
+                    || (prop_l == "visibility" && val_l.contains("hidden")))
+            {
+                continue;
+            }
+            safe_decls.push(format!("{}:{}", prop.trim(), val.trim()));
+        }
+        if !safe_decls.is_empty() {
+            out.push_str(selector);
+            out.push('{');
+            out.push_str(&safe_decls.join(";"));
+            out.push('}');
+        }
+    }
+    out
+}
+
+/// Extract and sanitize all `<style>...</style>` blocks from `raw_html`.
+fn extract_sanitized_styles(raw_html: &str) -> String {
+    let lower = raw_html.to_ascii_lowercase();
+    let mut combined = String::new();
+    let mut cursor = 0usize;
+    while let Some(rel_start) = lower[cursor..].find("<style") {
+        let tag_start = cursor + rel_start;
+        let Some(rel_gt) = lower[tag_start..].find('>') else {
+            break;
+        };
+        let content_start = tag_start + rel_gt + 1;
+        let Some(rel_end) = lower[content_start..].find("</style") else {
+            break;
+        };
+        let content_end = content_start + rel_end;
+        let sanitized = sanitize_stylesheet(&raw_html[content_start..content_end]);
+        if !sanitized.is_empty() {
+            combined.push_str(&sanitized);
+        }
+        cursor = content_end + "</style".len();
+    }
+    combined
+}
+
 /// Sanitize untrusted HTML email markup:
-/// - strips scripts, `<style>` blocks, forms, iframes, objects, SVGs, and inline event handlers
+/// - strips scripts, forms, iframes, objects, SVGs, and inline event handlers
+/// - extracts and sanitizes `<style>` blocks (preserving `.preheader` / `@media` layout rules while stripping `@import`, `@font-face`, `url(...)`, and `position:fixed`)
 /// - preserves a strict allowlist of URL-free inline CSS properties in `style` attributes
 /// - drops `javascript:`, `vbscript:`, and untrusted `data:` URLs
 /// - blocks remote images unless `options.allow_remote_images` is true, counting blocked ones
@@ -166,6 +359,7 @@ pub fn sanitize(
     inline_images: &BTreeMap<String, InlineImage>,
     options: SanitizeOptions,
 ) -> SanitizedHtml {
+    let safe_css = extract_sanitized_styles(raw_html);
     let mut nonce_bytes = [0u8; 16];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce: String = nonce_bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -189,7 +383,7 @@ pub fn sanitize(
     builder.url_schemes(HashSet::from(["http", "https", "mailto", "cid"]));
     builder.url_relative(ammonia::UrlRelative::Deny);
     builder.link_rel(Some("noopener noreferrer"));
-    builder.add_generic_attributes(["style"]);
+    builder.add_generic_attributes(["style", "class", "id"]);
     builder.filter_style_properties(SAFE_STYLE_PROPERTIES.iter().copied().collect());
     for tag in ["div", "p", "h1", "h2", "h3", "h4", "h5", "h6"] {
         builder.add_tag_attributes(tag, ["align"]);
@@ -254,6 +448,10 @@ pub fn sanitize(
         }
     }
 
+    if !safe_css.is_empty() {
+        html = format!("<style>{safe_css}</style>{html}");
+    }
+
     SanitizedHtml {
         html,
         blocked_remote_images: blocked_remote_images.load(Ordering::Relaxed),
@@ -281,7 +479,7 @@ mod tests {
         let out = &sanitized.html;
         assert!(!out.contains("<script"));
         assert!(!out.contains("alert(1)"));
-        assert!(!out.contains("<style"));
+        assert!(!out.contains("body{display:none}"));
         assert!(!out.contains("<iframe"));
         assert!(!out.contains("<form"));
         assert!(!out.contains("<input"));
@@ -452,5 +650,58 @@ mod tests {
         );
         assert!(!out.contains("z-index"), "leaked z-index: {out}");
         assert_eq!(sanitized.blocked_remote_images, 1);
+    }
+
+    #[test]
+    fn sanitizes_style_blocks_preserving_preheader_and_media_queries_safely() {
+        let dirty = r##"
+            <style>
+              @import url("https://track.test/evil.css");
+              @font-face { font-family: Evil; src: url(https://track.test/font.woff2); }
+              /* comment */
+              body { display: none; color: #202124; }
+              .preheader { display: none; max-height: 0; overflow: hidden; }
+              .hero { background-image: url(https://track.test/bg.png); color: #1a73e8; position: fixed; }
+              @media (max-width: 600px) {
+                .col { width: 100%; background: url(https://track.test/m.gif); }
+              }
+            </style>
+            <div class="preheader">Learn more about your plan</div>
+            <div class="hero">Welcome</div>
+        "##;
+        let sanitized = sanitize(dirty, &BTreeMap::new(), SanitizeOptions::default());
+        let out = &sanitized.html;
+
+        assert!(
+            out.contains("<style>"),
+            "expected sanitized <style> in {out}"
+        );
+        assert!(
+            out.contains(".preheader{display:none;max-height:0;overflow:hidden}"),
+            "expected .preheader rule in {out}"
+        );
+        assert!(
+            out.contains(r#"class="preheader""#),
+            "expected class attribute preserved in {out}"
+        );
+        assert!(
+            out.contains("@media (max-width: 600px){.col{width:100%}}"),
+            "expected safe @media rule in {out}"
+        );
+        assert!(
+            out.contains("color:#1a73e8"),
+            "expected safe color in {out}"
+        );
+        assert!(!out.contains("track.test"), "leaked tracker URL: {out}");
+        assert!(!out.contains("@import"), "leaked @import: {out}");
+        assert!(!out.contains("@font-face"), "leaked @font-face: {out}");
+        assert!(
+            !out.contains("position:fixed"),
+            "leaked position:fixed: {out}"
+        );
+        assert!(
+            !out.contains("body{display:none"),
+            "leaked body display:none: {out}"
+        );
     }
 }

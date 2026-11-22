@@ -1158,6 +1158,21 @@ class MailController extends ChangeNotifier {
     _compose = null;
     notifyListeners();
 
+    // Start loading the latest message body immediately so the loading shimmer
+    // appears on frame 1 (or cached mail renders instantly) instead of waiting
+    // behind the conversation lookup.
+    unawaited(loadMessageContent(latest.id));
+    if (thread.hasUnread) {
+      final unreadIds = thread.messages
+          .where((m) => !m.seen)
+          .map((m) => m.id)
+          .toList(growable: false);
+      if (unreadIds.isNotEmpty) {
+        unawaited(organizeMessages('flags', ids: unreadIds, seen: true));
+      }
+    }
+    unawaited(loadSummary(latest.id));
+
     try {
       final conversation = await _backend.conversation(account, latest.id);
       if (epoch != _threadEpoch || account != _activeAccount) return;
@@ -1170,18 +1185,10 @@ class MailController extends ChangeNotifier {
 
     if (epoch != _threadEpoch || account != _activeAccount) return;
     for (final tm in _conversation) {
-      unawaited(loadMessageContent(tm.message.id));
-    }
-    if (thread.hasUnread) {
-      final unreadIds = thread.messages
-          .where((m) => !m.seen)
-          .map((m) => m.id)
-          .toList(growable: false);
-      if (unreadIds.isNotEmpty) {
-        await organizeMessages('flags', ids: unreadIds, seen: true);
+      if (tm.message.id != latest.id) {
+        unawaited(loadMessageContent(tm.message.id));
       }
     }
-    unawaited(loadSummary(latest.id));
   }
 
   void clearSelection() {

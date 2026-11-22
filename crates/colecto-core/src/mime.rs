@@ -431,7 +431,7 @@ mod tests {
         let content = sanitized_content(RAW, false).unwrap();
         let html = content.html.unwrap();
         assert!(!html.contains("<script"));
-        assert!(!html.contains("<style"));
+        assert!(html.contains("<style>p{color:red}</style>"));
         assert!(!html.contains("track.test"));
         assert_eq!(content.blocked_remote_images, 1);
         assert!(html.contains("data:image/png;base64,UE5H"));

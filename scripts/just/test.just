@@ -21,7 +21,8 @@ app:
     #!/usr/bin/env bash
     set -euo pipefail
     workers=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-    cd app && flutter test --concurrency="$workers"
+    (cd app && flutter test --concurrency="$workers")
+    (cd packages/kogi_webview && flutter test --concurrency="$workers")
 
 # Run the critical-path Flutter RemoteHttpBackend <-> live colecto-daemon E2E contract test.
 e2e:

@@ -130,6 +130,7 @@ Everything is indexed in [docs/README.md](docs/README.md).
 | Architecture & UI design | [Architecture](docs/architecture.md), [UI design](docs/ui-design.md), [Decisions](docs/decisions.md) |
 | Storage | [Storage](docs/storage.md) |
 | Hack on Colecto | [Development](docs/development.md) |
+| Reusable packages | [kogi_webview](packages/kogi_webview/README.md): live WebKitGTK views inside Flutter on Linux |
 
 ## Security
 

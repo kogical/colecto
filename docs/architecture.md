@@ -133,4 +133,5 @@ What else is needed to run the daemon in Docker:
   1. Rust sanitizes the HTML (strips `<script>`, forms, unsafe handlers; blocks remote images by default unless allowed per-sender or in Privacy settings; resolves `cid:` inline images).
   2. Flutter renders the sanitized HTML in a **single lazy/pooled sandboxed WebView** that mounts only when an HTML message is open and releases/reuses when closed.
   3. On **Web (Wasm)**, render in a real `<iframe sandbox>` via Flutter's `HtmlElementView`.
+     On **Linux**, a live WebKitGTK view from `packages/kogi_webview` is composited *under* Flutter and shows through a transparent hole in Flutter's frame, so it scrolls with the reader, clips under the toolbar and sits beneath dialogs and menus; page scripts are off and network loads are blocked unless the owner loads remote images ([decision](decisions.md#linux-html-email-webkitgtk-through-a-hole-in-flutter-kogi_webview)).
   4. External links (`http`, `https`, `mailto`) are intercepted and opened via the OS browser / mail handler, never inside the embedded WebView.

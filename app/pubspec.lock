@@ -445,6 +445,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.2"
+  kogi_webview:
+    dependency: "direct main"
+    description:
+      path: "../packages/kogi_webview"
+      relative: true
+    source: path
+    version: "0.1.0"
   leak_tracker:
     dependency: transitive
     description:
@@ -892,4 +899,4 @@ packages:
     version: "3.1.4"
 sdks:
   dart: ">=3.14.0 <4.0.0"
-  flutter: ">=3.47.0"
+  flutter: ">=3.50.0"

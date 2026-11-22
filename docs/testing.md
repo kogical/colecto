@@ -38,12 +38,16 @@ We deliberately favor **integration tests** over heavy unit-test sprawl or britt
    - **Rust:** Prefer `cargo-nextest` (`.config/nextest.toml`) for per-process parallelism and
      slow-test visibility. Consolidate overlapping tests that each spin up a fresh Turso database.
 
+## HTML email fixtures
+
+`app/assets/demo/emails/` holds five real-world-style HTML emails (account verification, order receipt, newsletter, CI notification, security alert) written in the style of common senders: preheaders padded with `&#8202;`/`&zwnj;`, Outlook conditional comments and VML buttons, remote logos and tracking pixels, CSS background images, `@import` fonts, `@media` and dark-mode rules, nested layout tables. They are the demo account's HTML mail (`just run demo`) and the input to `crates/colecto-core/tests/email_fixtures.rs`, which runs each through the full MIME → sanitize → preview pipeline. Add a fixture when a real email breaks rendering or previews.
+
 ## Running Tests
 
 ```sh
 just test            # Fast Rust + Flutter suites (parallelized)
 just test rust       # Rust workspace tests (uses cargo-nextest when installed, else cargo test)
-just test app        # Flutter unit, widget, and integration tests across workers
+just test app        # Flutter unit, widget, and integration tests across workers (app + packages/kogi_webview)
 just test e2e        # Live Flutter RemoteHttpBackend <-> colecto-daemon E2E contract test
 just test jmap       # Real JMAP server E2E (Cyrus in Docker, port 8080)
 just test mail       # Real IMAP/SMTP E2E (GreenMail in Docker, ports 3993 & 465)
@@ -56,5 +60,6 @@ just verify          # Full static checks + fast test suites
 
 - **`rust`**: `cargo fmt`, `cargo clippy --all-targets -D warnings`, `cargo nextest run --workspace --locked --profile ci`, and doctests. Publishes the built `colecto-daemon` test binary for downstream E2E verification.
 - **`flutter`**: `dart format`, `flutter analyze`, `flutter test --concurrency=$(nproc)` across all test files in parallel, and the Flutter Web build.
+- **`webview`**: Only when `packages/kogi_webview` changes. Builds the package example with `--dart-define=KOGI_SMOKE=true` and runs `packages/kogi_webview/tool/wayland_smoke.sh` under headless Weston: a pixel check that WebKit shows through Flutter's hole, that opaque Flutter content surrounds it, and that a Flutter overlay draws above it. Xvfb cannot catch Wayland stacking bugs, so HTML-rendering fixes must not be verified on X11 alone.
 - **`e2e`**: Downloads `colecto-daemon` from the `rust` job (no recompilation) and runs `app/test/daemon_e2e_test.dart` against the live daemon process over HTTP + SSE.
 - **`docker`**: Builds the daemon container with bundled Flutter Web assets and smoke-tests fail-closed non-loopback startup and loopback `/api/v1/version`. The `Dockerfile` compiles Rust dependencies in a [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) layer keyed only on manifests and `Cargo.lock`, and CI stores those layers in the GitHub Actions cache (`daemon-docker-<arch>` scope, saved on `develop` and `main`, shared with the release image build), so a routine run recompiles only the workspace crates. Keep `ARG COLECTO_COMMIT` just before the final `cargo build`: a build arg that changes invalidates every `RUN` after it.

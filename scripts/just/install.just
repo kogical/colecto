@@ -11,3 +11,4 @@ rust:
 # Fetch Flutter/Dart dependencies.
 app:
     cd app && flutter pub get
+    cd packages/kogi_webview/example && flutter pub get

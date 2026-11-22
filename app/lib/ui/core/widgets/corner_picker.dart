@@ -1,3 +1,4 @@
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../domain/models/preferences_models.dart';
@@ -64,7 +65,7 @@ class CornerPicker extends StatelessWidget {
       return Container(
         height: 28,
         alignment: Alignment.center,
-        child: Icon(Icons.mail_outline, size: 13, color: p.ink3),
+        child: Icon(LucideIcons.mail, size: 13, color: p.ink3),
       );
     }
     final selected = corner == value;

@@ -30,6 +30,13 @@ enum ColectoPlatformStyle {
   /// Pointer-first desktop designs.
   bool get pointer => !touch;
 
+  /// The default font name shown to the user for this design.
+  String get defaultFontName => switch (this) {
+    fluent => 'Segoe UI Variable',
+    macos => 'San Francisco',
+    _ => 'Mona Sans',
+  };
+
   /// The platform Flutter should emulate (scroll physics, text editing
   /// shortcuts, page transitions), or null to keep the real one.
   TargetPlatform? get platform => switch (this) {
@@ -80,7 +87,30 @@ class ColectoDesign extends ThemeExtension<ColectoDesign> {
 
   @override
   ColectoDesign lerp(ThemeExtension<ColectoDesign>? other, double t) =>
-      t < 0.5 || other is! ColectoDesign ? this : other;
+      t > 0 && other is ColectoDesign ? other : this;
+}
+
+/// Carries the resolved interface font family through the theme so every
+/// design kit and input field uses the exact same typeface.
+@immutable
+class ColectoFont extends ThemeExtension<ColectoFont> {
+  const ColectoFont({this.family, this.fallback = const []});
+
+  final String? family;
+  final List<String> fallback;
+
+  static ColectoFont of(BuildContext context) =>
+      Theme.of(context).extension<ColectoFont>() ?? const ColectoFont();
+
+  @override
+  ColectoFont copyWith({String? family, List<String>? fallback}) => ColectoFont(
+    family: family ?? this.family,
+    fallback: fallback ?? this.fallback,
+  );
+
+  @override
+  ColectoFont lerp(ThemeExtension<ColectoFont>? other, double t) =>
+      t > 0 && other is ColectoFont ? other : this;
 }
 
 ColectoPlatformStyle colectoPlatformStyle(BuildContext context) =>
@@ -487,7 +517,7 @@ ThemeData buildColectoTheme({
   final platform = style.platform ?? defaultTargetPlatform;
   final isDesktopOrWeb = style.pointer;
   final fontFamily = resolveFontFamily(preferences.font, style: style);
-  const fallback = ['Segoe UI', 'SF Pro Text', 'Mona Sans'];
+  const fallback = ['Mona Sans', 'Segoe UI', 'SF Pro Text'];
   final spacing = preferences.textSpacing;
 
   final baseText = applyTextSpacing(
@@ -558,6 +588,13 @@ ThemeData buildColectoTheme({
       primaryColor: palette.accent,
       scaffoldBackgroundColor: palette.bg,
       barBackgroundColor: palette.bg.withValues(alpha: 0.86),
+      textTheme: CupertinoTextThemeData(
+        textStyle: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fallback,
+          color: palette.ink,
+        ),
+      ),
     ),
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: {
@@ -603,6 +640,10 @@ ThemeData buildColectoTheme({
         return palette.line;
       }),
     ),
-    extensions: [palette, ColectoDesign(style)],
+    extensions: [
+      palette,
+      ColectoDesign(style),
+      ColectoFont(family: fontFamily, fallback: fallback),
+    ],
   );
 }

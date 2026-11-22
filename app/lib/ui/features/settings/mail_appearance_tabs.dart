@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../data/platform/system_fonts.dart';
 import '../../../domain/models/preferences_models.dart';
 import '../../core/kit/kit.dart';
 import '../../core/theme/colecto_palette.dart';
@@ -119,14 +120,7 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
     ('#c4dd8f', 'Lime'),
   ];
 
-  static const _fonts = <(String, String)>[
-    ('', 'Platform default'),
-    ('mona', 'Mona Sans'),
-    ('inter', 'Inter'),
-    ('geist', 'Geist'),
-    ('plex', 'IBM Plex Sans'),
-    ('atkinson', 'Atkinson Hyperlegible Next'),
-  ];
+  static const _bundledFonts = <(String, String)>[('mona', 'Mona Sans')];
 
   static const _sizes = <(int, String)>[
     (13, 'Small'),
@@ -148,11 +142,50 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
   ];
 
   final _hex = TextEditingController();
+  List<String> _systemFonts = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    listSystemFonts().then((fonts) {
+      if (mounted) setState(() => _systemFonts = fonts);
+    });
+  }
 
   @override
   void dispose() {
     _hex.dispose();
     super.dispose();
+  }
+
+  String _fontLabel(String pref, ColectoPlatformStyle design) {
+    if (pref.isEmpty) return 'Design default (${design.defaultFontName})';
+    for (final (id, name) in _bundledFonts) {
+      if (id == pref) return name;
+    }
+    return resolveFontFamily(pref, style: design) ?? pref;
+  }
+
+  Future<void> _switchDesign(ColectoPlatformStyle next) async {
+    final c = widget.controller;
+    if (next == c.design) return;
+    final customFont = c.preferences.font ?? '';
+    if (customFont.isNotEmpty) {
+      final fontName = _fontLabel(customFont, c.design);
+      final useDefault = await showColectoConfirm(
+        context: context,
+        title: 'Use ${next.label}’s default font?',
+        message:
+            'You currently have “$fontName” selected. ${next.label} uses '
+            '${next.defaultFontName} by default.',
+        confirmLabel: 'Use default font',
+        cancelLabel: 'Keep my font',
+      );
+      if (!mounted) return;
+      await c.setDesign(next, resetFont: useDefault);
+    } else {
+      await c.setDesign(next);
+    }
   }
 
   void _setAccent(String hex) =>
@@ -218,12 +251,14 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
             ColectoSettingRow(
               title: 'Font',
               description:
-                  'Bundled fonts work offline on every device. Platform '
-                  'default uses your system’s interface font.',
-              trailing: ColectoSelect<String>(
+                  'Choose this design’s default, a bundled offline typeface, '
+                  'or any font installed on your system.',
+              trailing: _FontPicker(
                 value: prefs.font ?? '',
-                minWidth: 220,
-                options: _fonts,
+                label: _fontLabel(prefs.font ?? '', c.design),
+                designDefaultName: c.design.defaultFontName,
+                bundledFonts: _bundledFonts,
+                systemFonts: _systemFonts,
                 onChanged: (f) =>
                     c.updatePreferences(PreferencesPatch(font: f)),
               ),
@@ -410,7 +445,7 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
                           : d.label,
                     ),
                 ],
-                onChanged: c.setDesign,
+                onChanged: (d) => _switchDesign(d),
               ),
             ),
             ColectoSettingRow(
@@ -454,6 +489,112 @@ class _AppearanceSettingsTabState extends State<AppearanceSettingsTab> {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _FontPicker extends StatelessWidget {
+  const _FontPicker({
+    required this.value,
+    required this.label,
+    required this.designDefaultName,
+    required this.bundledFonts,
+    required this.systemFonts,
+    required this.onChanged,
+  });
+
+  final String value;
+  final String label;
+  final String designDefaultName;
+  final List<(String, String)> bundledFonts;
+  final List<String> systemFonts;
+  final ValueChanged<String> onChanged;
+
+  void _open(BuildContext ctx) {
+    final items = <ColectoMenuItem>[
+      const ColectoMenuItem.header('THIS DESIGN'),
+      ColectoMenuItem(
+        label: 'Design default',
+        subtitle: designDefaultName,
+        checked: value.isEmpty,
+        onSelected: () => onChanged(''),
+      ),
+      const ColectoMenuItem.divider(),
+      const ColectoMenuItem.header('BUNDLED FONTS'),
+      for (final (id, name) in bundledFonts)
+        ColectoMenuItem(
+          label: name,
+          fontFamily: name,
+          checked: value == id,
+          onSelected: () => onChanged(id),
+        ),
+      if (systemFonts.isNotEmpty) ...[
+        const ColectoMenuItem.divider(),
+        const ColectoMenuItem.header('SYSTEM FONTS'),
+        for (final family in systemFonts)
+          ColectoMenuItem(
+            label: family,
+            fontFamily: family,
+            checked: value == family,
+            onSelected: () => onChanged(family),
+          ),
+      ],
+    ];
+    final rect = colectoRectOf(ctx);
+    if (colectoTouch(ctx)) {
+      showColectoContextMenu(
+        context: ctx,
+        globalPosition: rect.center,
+        title: 'Font',
+        items: items,
+      );
+    } else {
+      showColectoMenu(
+        context: ctx,
+        anchor: rect,
+        width: 260,
+        alignRight: true,
+        items: items,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    final radius = colectoRadius(context);
+    return Builder(
+      builder: (ctx) => ColectoPressable(
+        onTap: () => _open(ctx),
+        semanticLabel: 'Font: $label',
+        focusRadius: radius,
+        builder: (context, s) => AnimatedContainer(
+          duration: ColectoMotion.hover,
+          constraints: const BoxConstraints(minWidth: 220, maxWidth: 280),
+          height: colectoTouch(context) ? 40 : 34,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: s.hovered ? p.raise : p.sunk,
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: s.hovered ? p.ink3 : p.line),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: kStyle(13.5, color: p.ink),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(LucideIcons.chevronsUpDown, size: 14, color: p.ink3),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

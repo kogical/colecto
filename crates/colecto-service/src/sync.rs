@@ -285,7 +285,7 @@ pub(crate) fn refresh(
             match &result {
                 Ok(_) => {
                     entry.error = None;
-                    if folder == "inbox" {
+                    if colecto_core::canonical_folder(folder) == "inbox" {
                         entry.updated_at = Some(crate::api_keys::now());
                     }
                 }

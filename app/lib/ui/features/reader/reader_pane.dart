@@ -1,5 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
@@ -190,90 +188,88 @@ class _ReaderPaneState extends State<ReaderPane> {
           variant: ColectoButtonVariant.ghost,
           onPressed: onTap,
         );
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-        child: Container(
-          height: _toolbarHeight,
-          padding: EdgeInsets.only(
-            left: widget.showBackButton ? 6 : (narrow ? 16 : 24),
-            right: narrow ? 6 : 12,
+    return Container(
+      height: _toolbarHeight,
+      padding: EdgeInsets.only(
+        left: widget.showBackButton ? 6 : (narrow ? 16 : 24),
+        right: narrow ? 6 : 12,
+      ),
+      decoration: BoxDecoration(
+        color: p.bg.withValues(alpha: 0.96),
+        border: Border(bottom: BorderSide(color: p.lineSoft)),
+      ),
+      child: Row(
+        children: [
+          if (widget.showBackButton)
+            ColectoIconButton(
+              icon: isIos ? LucideIcons.chevronLeft : LucideIcons.arrowLeft,
+              tooltip: 'Back',
+              size: isIos ? 22 : 18,
+              onPressed: widget.onBack,
+            ),
+          Expanded(
+            child: Text(
+              c.currentFolderName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: kStyle(13, weight: 540, color: p.ink3),
+            ),
           ),
-          color: p.bg.withValues(alpha: 0.86),
-          child: Row(
-            children: [
-              if (widget.showBackButton)
-                ColectoIconButton(
-                  icon: isIos ? LucideIcons.chevronLeft : LucideIcons.arrowLeft,
-                  tooltip: 'Back',
-                  size: isIos ? 22 : 18,
-                  onPressed: widget.onBack,
-                ),
-              Expanded(
-                child: Text(
-                  c.currentFolderName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: kStyle(13, weight: 540, color: p.ink3),
+          if (latest != null) ...[
+            tool(
+              LucideIcons.reply,
+              'Reply',
+              () => widget.onCompose(_reply(latest, content, false)),
+            ),
+            if (!narrow)
+              tool(
+                LucideIcons.replyAll,
+                'Reply all',
+                () => widget.onCompose(_reply(latest, content, true)),
+              ),
+            tool(
+              LucideIcons.forward,
+              'Forward',
+              () => widget.onCompose(forwardRequest(latest, content)),
+            ),
+            Container(
+              width: 1,
+              height: 18,
+              margin: const EdgeInsets.symmetric(horizontal: 6),
+              color: p.line,
+            ),
+            ColectoIconButton(
+              icon: LucideIcons.archive,
+              tooltip: 'Archive (E)',
+              onPressed: () => c.organizeMessages('archive', ids: allIds),
+            ),
+            ColectoIconButton(
+              icon: LucideIcons.trash2,
+              tooltip: 'Move to Trash (#)',
+              danger: true,
+              onPressed: () => c.organizeMessages('delete', ids: allIds),
+            ),
+            if (!narrow)
+              ColectoIconButton(
+                icon: LucideIcons.star,
+                tooltip: latest.flagged ? 'Unstar (S)' : 'Star (S)',
+                color: latest.flagged ? p.star : null,
+                onPressed: () => c.organizeMessages(
+                  'flags',
+                  ids: [latest.id],
+                  flagged: !latest.flagged,
                 ),
               ),
-              if (latest != null) ...[
-                tool(
-                  LucideIcons.reply,
-                  'Reply',
-                  () => widget.onCompose(_reply(latest, content, false)),
-                ),
-                if (!narrow)
-                  tool(
-                    LucideIcons.replyAll,
-                    'Reply all',
-                    () => widget.onCompose(_reply(latest, content, true)),
-                  ),
-                tool(
-                  LucideIcons.forward,
-                  'Forward',
-                  () => widget.onCompose(forwardRequest(latest, content)),
-                ),
-                Container(
-                  width: 1,
-                  height: 18,
-                  margin: const EdgeInsets.symmetric(horizontal: 6),
-                  color: p.line,
-                ),
-                ColectoIconButton(
-                  icon: LucideIcons.archive,
-                  tooltip: 'Archive (E)',
-                  onPressed: () => c.organizeMessages('archive', ids: allIds),
-                ),
-                ColectoIconButton(
-                  icon: LucideIcons.trash2,
-                  tooltip: 'Move to Trash (#)',
-                  danger: true,
-                  onPressed: () => c.organizeMessages('delete', ids: allIds),
-                ),
-                if (!narrow)
-                  ColectoIconButton(
-                    icon: LucideIcons.star,
-                    tooltip: latest.flagged ? 'Unstar (S)' : 'Star (S)',
-                    color: latest.flagged ? p.star : null,
-                    onPressed: () => c.organizeMessages(
-                      'flags',
-                      ids: [latest.id],
-                      flagged: !latest.flagged,
-                    ),
-                  ),
-                Builder(
-                  builder: (ctx) => ColectoIconButton(
-                    icon: LucideIcons.ellipsis,
-                    tooltip: 'More',
-                    onPressed: () =>
-                        _moreMenu(ctx, latest, content, allIds, narrow),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
+            Builder(
+              builder: (ctx) => ColectoIconButton(
+                icon: LucideIcons.ellipsis,
+                tooltip: 'More',
+                onPressed: () =>
+                    _moreMenu(ctx, latest, content, allIds, narrow),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

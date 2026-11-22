@@ -692,6 +692,7 @@ impl MailStore {
         self.query("inbox", "")
     }
     fn observe_mailbox_identity(&mut self, folder: &str, identity: &str) -> Result<(), Error> {
+        let folder = canonical_folder(folder);
         if let Some(provider) = &self.account_key
             && self.cache.observe_identity(provider, folder, identity)?
         {
@@ -772,6 +773,7 @@ impl MailStore {
         offset: usize,
         limit: usize,
     ) -> Result<Option<QueryJob>, Error> {
+        let folder = canonical_folder(folder);
         validate_query(folder, search)?;
         validate_offset(offset)?;
         validate_limit(limit)?;
@@ -820,6 +822,7 @@ impl MailStore {
         offset: usize,
         messages: Vec<Message>,
     ) -> Result<Vec<Message>, Error> {
+        let folder = canonical_folder(folder);
         // Only the newest page of Inbox and Sent is saved as a snapshot; older pages and
         // other folders are kept in the reader cache, so opening one still works.
         let snapshot = search.is_empty() && offset == 0;
@@ -1046,6 +1049,16 @@ fn bounded_body(body: String) -> String {
         body
     } else {
         body
+    }
+}
+
+/// RFC 3501 §5.1 treats `INBOX` case-insensitively; normalize any casing to `"inbox"`
+/// so snapshots, sync timestamps, and folder queries share one key.
+pub fn canonical_folder(folder: &str) -> &str {
+    if folder.eq_ignore_ascii_case("inbox") {
+        "inbox"
+    } else {
+        folder
     }
 }
 

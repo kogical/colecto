@@ -10,7 +10,9 @@ class ColectoMenuItem {
     this.shortcut,
     this.enabled = true,
     this.subtitle,
-  }) : divider = false;
+    this.fontFamily,
+  }) : divider = false,
+       header = false;
 
   const ColectoMenuItem.divider()
     : label = '',
@@ -21,7 +23,21 @@ class ColectoMenuItem {
       shortcut = null,
       enabled = false,
       subtitle = null,
-      divider = true;
+      fontFamily = null,
+      divider = true,
+      header = false;
+
+  const ColectoMenuItem.header(this.label)
+    : onSelected = null,
+      icon = null,
+      danger = false,
+      checked = null,
+      shortcut = null,
+      enabled = false,
+      subtitle = null,
+      fontFamily = null,
+      divider = false,
+      header = true;
 
   final String label;
   final VoidCallback? onSelected;
@@ -33,7 +49,9 @@ class ColectoMenuItem {
   final String? shortcut;
   final bool enabled;
   final String? subtitle;
+  final String? fontFamily;
   final bool divider;
+  final bool header;
 }
 
 /// Shows a context menu: a popover that grows from the pointer on desktop
@@ -72,7 +90,7 @@ Future<void> _showCupertinoActions(
     builder: (ctx) => CupertinoActionSheet(
       title: title == null ? null : Text(title),
       actions: [
-        for (final item in items.where((i) => !i.divider))
+        for (final item in items.where((i) => !i.divider && !i.header))
           CupertinoActionSheetAction(
             isDestructiveAction: item.danger,
             onPressed: () {
@@ -125,6 +143,19 @@ Future<void> _showMaterialActions(
           for (final item in items)
             if (item.divider)
               Divider(height: 9, color: p.lineSoft)
+            else if (item.header)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 10, 24, 4),
+                child: Text(
+                  item.label,
+                  style: kStyle(
+                    11,
+                    weight: 600,
+                    color: p.ink3,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              )
             else
               ListTile(
                 enabled: item.enabled,
@@ -215,10 +246,10 @@ class _ColectoMenuRoute extends PopupRoute<VoidCallback> {
   String? get barrierLabel => 'Close menu';
 
   @override
-  Duration get transitionDuration => ColectoMotion.popIn;
+  Duration get transitionDuration => const Duration(milliseconds: 150);
 
   @override
-  Duration get reverseTransitionDuration => ColectoMotion.popOut;
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 100);
 
   @override
   Widget buildPage(
@@ -258,10 +289,16 @@ class _ColectoMenuLayout extends StatelessWidget {
     final screen = MediaQuery.sizeOf(context);
     final padding = MediaQuery.paddingOf(context);
     final estimated = math.min(
-      320.0,
+      360.0,
       items.fold<double>(
         10,
-        (h, i) => h + (i.divider ? 9 : (i.subtitle != null ? 46 : 34)),
+        (h, i) =>
+            h +
+            (i.divider
+                ? 9
+                : i.header
+                ? 26
+                : (i.subtitle != null ? 46 : 34)),
       ),
     );
     final below =
@@ -271,6 +308,11 @@ class _ColectoMenuLayout extends StatelessWidget {
     var left = alignRight ? anchor.right - width : anchor.left;
     left = left.clamp(8.0, math.max(8.0, screen.width - width - 8));
     final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    // Origin-aware transform: scale directly from where the pointer/trigger is.
+    final originX = width > 0
+        ? (((anchor.center.dx - left) / width) * 2 - 1).clamp(-1.0, 1.0)
+        : (alignRight ? 1.0 : -1.0);
+    final origin = Alignment(originX, below ? -1.0 : 1.0);
 
     return Stack(
       children: [
@@ -282,31 +324,22 @@ class _ColectoMenuLayout extends StatelessWidget {
           child: AnimatedBuilder(
             animation: animation,
             builder: (context, child) {
-              final forward = animation.status != AnimationStatus.reverse;
-              final t = reduce
-                  ? 1.0
-                  : (forward ? ColectoMotion.easeOut : Curves.easeIn).transform(
-                      animation.value,
-                    );
-              final blur = (1 - t) * 2;
-              Widget out = Opacity(
+              // Strong ease-out for both enter and exit (never sluggish ease-in).
+              final t = ColectoMotion.easeOut.transform(animation.value);
+              if (reduce) {
+                return Opacity(opacity: t.clamp(0.0, 1.0), child: child);
+              }
+              return Opacity(
                 opacity: t.clamp(0.0, 1.0),
                 child: Transform.translate(
-                  offset: Offset(0, (1 - t) * (below ? -6 : 6)),
+                  offset: Offset(0, (1 - t) * (below ? -4 : 4)),
                   child: Transform.scale(
                     scale: 0.95 + 0.05 * t,
-                    alignment: Alignment(alignRight ? 1 : -1, below ? -1 : 1),
+                    alignment: origin,
                     child: child,
                   ),
                 ),
               );
-              if (blur > 0.05) {
-                out = ImageFiltered(
-                  imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-                  child: out,
-                );
-              }
-              return out;
             },
             child: _ColectoMenuPanel(items: items),
           ),
@@ -331,7 +364,10 @@ class _ColectoMenuPanelState extends State<_ColectoMenuPanel> {
 
   List<int> get _selectable => [
     for (var i = 0; i < widget.items.length; i++)
-      if (!widget.items[i].divider && widget.items[i].enabled) i,
+      if (!widget.items[i].divider &&
+          !widget.items[i].header &&
+          widget.items[i].enabled)
+        i,
   ];
 
   @override
@@ -393,7 +429,7 @@ class _ColectoMenuPanelState extends State<_ColectoMenuPanel> {
       autofocus: true,
       onKeyEvent: _onKey,
       child: Container(
-        constraints: const BoxConstraints(maxHeight: 320),
+        constraints: const BoxConstraints(maxHeight: 360),
         decoration: BoxDecoration(
           color: p.float,
           borderRadius: BorderRadius.circular(_panelRadius(context)),
@@ -408,12 +444,26 @@ class _ColectoMenuPanelState extends State<_ColectoMenuPanel> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 for (var i = 0; i < widget.items.length; i++)
-                  widget.items[i].divider
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Container(height: 1, color: p.lineSoft),
-                        )
-                      : _menuRow(context, p, i),
+                  if (widget.items[i].divider)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Container(height: 1, color: p.lineSoft),
+                    )
+                  else if (widget.items[i].header)
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(10, i == 0 ? 4 : 8, 10, 4),
+                      child: Text(
+                        widget.items[i].label,
+                        style: kStyle(
+                          10.5,
+                          weight: 600,
+                          color: p.ink3,
+                          letterSpacing: 0.65,
+                        ),
+                      ),
+                    )
+                  else
+                    _menuRow(context, p, i),
               ],
             ),
           ),
@@ -483,7 +533,10 @@ class _ColectoMenuPanelState extends State<_ColectoMenuPanel> {
                       item.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: kStyle(mac ? 13 : (fluent ? 14 : 13.5), color: fg),
+                      style: kStyle(
+                        mac ? 13 : (fluent ? 14 : 13.5),
+                        color: fg,
+                      ).copyWith(fontFamily: item.fontFamily),
                     ),
                     if (item.subtitle != null)
                       Text(

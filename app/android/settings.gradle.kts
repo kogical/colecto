@@ -24,3 +24,19 @@ plugins {
 }
 
 include(":app")
+
+// AGP 9 removed `proguard-android.txt`; patch flutter_inappwebview_android <= 1.1.3
+// before Gradle evaluates its build.gradle so Android release builds succeed.
+gradle.beforeProject {
+    if (name == "flutter_inappwebview_android") {
+        val buildGradle = file("build.gradle")
+        if (buildGradle.exists()) {
+            val text = buildGradle.readText()
+            if (text.contains("proguard-android.txt")) {
+                buildGradle.writeText(
+                    text.replace("proguard-android.txt", "proguard-android-optimize.txt")
+                )
+            }
+        }
+    }
+}

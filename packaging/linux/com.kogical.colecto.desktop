@@ -5,5 +5,5 @@ Comment=Email client
 Exec=colecto
 Icon=colecto
 Categories=Network;Email;
-StartupWMClass=Colecto
+StartupWMClass=com.kogical.colecto
 Terminal=false

@@ -3,7 +3,9 @@ import 'dart:io' show zlib;
 import 'dart:typed_data';
 
 import 'package:colecto/ui/core/theme/colecto_palette.dart';
+import 'package:colecto/ui/core/widgets/html_message_native.dart';
 import 'package:colecto/ui/core/widgets/html_message_view.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -289,6 +291,7 @@ Future<void> _pumpEmail(
   required double width,
   Brightness brightness = Brightness.dark,
   ValueChanged<String>? onOpenUrl,
+  bool expectNativeFallback = true,
 }) async {
   tester.view.physicalSize = Size(width, 900);
   tester.view.devicePixelRatio = 1.0;
@@ -323,7 +326,20 @@ Future<void> _pumpEmail(
       ),
     ),
   );
-  // Allow async PNG decoding of data-URI images to complete in widget tests.
+  // Let the platform WebView probe complete on the real platform channel and
+  // fall back to NativeSanitizedHtmlView in headless tests, then decode inline
+  // PNG data URIs deterministically.
+  await tester.pump();
+  if (expectNativeFallback) {
+    for (var i = 0; i < 40; i++) {
+      if (find.byType(NativeSanitizedHtmlView).evaluate().isNotEmpty) break;
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+  }
+  await tester.pumpAndSettle();
   await tester.runAsync(() async {
     for (final element in find.byType(Image).evaluate()) {
       final image = element.widget as Image;
@@ -537,6 +553,49 @@ void main() {
             .widgetList<ColoredBox>(find.byType(ColoredBox))
             .where((b) => b.color == const Color(0xFFFFFFFF));
         expect(whiteBoxes, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'Linux WebKitGTK channel loads sanitized document and disposes on unmount',
+      (tester) async {
+        const channel = MethodChannel('com.kogical.colecto/webview');
+        final calls = <MethodCall>[];
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            calls.add(call);
+            return call.method == 'loadHtml' ? true : null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+
+        await _pumpEmail(
+          tester,
+          html: '<style>.preheader{display:none}</style><div class="preheader">Hidden</div><p>Hello</p>',
+          width: 780,
+          expectNativeFallback: false,
+        );
+
+        expect(calls.any((c) => c.method == 'loadHtml'), isTrue);
+        final loadArgs =
+            calls.firstWhere((c) => c.method == 'loadHtml').arguments
+                as Map<Object?, Object?>;
+        expect(
+          loadArgs['html'],
+          contains('<style>.preheader{display:none}</style>'),
+        );
+        expect(loadArgs['bg'], '#ffffff');
+
+        // Unmounting the reader destroys the native WebKitGTK view (0 idle RAM).
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        expect(calls.any((c) => c.method == 'dispose'), isTrue);
       },
     );
   });

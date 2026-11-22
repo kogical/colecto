@@ -2,11 +2,13 @@
 
 #include <flutter_linux/flutter_linux.h>
 
+#include "colecto_webview.h"
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  ColectoWebViewHost* webview_host;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -67,7 +69,16 @@ static void my_application_activate(GApplication* application) {
   gdk_rgba_parse(&background_color, "#000000");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
-  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+
+  GtkOverlay* overlay = GTK_OVERLAY(gtk_overlay_new());
+  gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(view));
+  GtkFixed* webview_layer = GTK_FIXED(gtk_fixed_new());
+  gtk_overlay_add_overlay(overlay, GTK_WIDGET(webview_layer));
+  gtk_overlay_set_overlay_pass_through(overlay, GTK_WIDGET(webview_layer),
+                                       TRUE);
+  gtk_widget_show(GTK_WIDGET(webview_layer));
+  gtk_widget_show(GTK_WIDGET(overlay));
+  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(overlay));
 
   // Show the window when Flutter renders.
   // Requires the view to be realized so we can start rendering.
@@ -76,6 +87,7 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  self->webview_host = colecto_webview_host_new(view, webview_layer);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -122,6 +134,7 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  g_clear_pointer(&self->webview_host, colecto_webview_host_dispose);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }

@@ -4,12 +4,15 @@ import '../theme/colecto_palette.dart';
 import 'html_message_iframe_stub.dart'
     if (dart.library.js_interop) 'html_message_iframe_web.dart';
 import 'html_message_native.dart';
+import 'html_message_webview_stub.dart'
+    if (dart.library.io) 'html_message_webview_io.dart';
 
-/// Displays Rust-sanitized HTML email:
-/// - On Web, inside a real `<iframe sandbox>` via `HtmlElementView`, created
-///   once per document and faded in after it paints.
-/// - On Desktop/Mobile, via [NativeSanitizedHtmlView] (real HTML5/CSS widget
-///   tree with zero WebView RAM).
+/// Displays Rust-sanitized HTML email (`AGENTS.md` rule 5):
+/// - On Web, inside a real `<iframe sandbox>` via `HtmlElementView`.
+/// - On Linux, inside a lazy ephemeral WebKitGTK 4.1 WebView (JS disabled).
+/// - On Windows/macOS/Android/iOS, inside a lazy `InAppWebView` (JS disabled).
+/// - In headless widget tests (or when no platform WebView is available), falls
+///   back cleanly to [NativeSanitizedHtmlView].
 class HtmlMessageView extends StatelessWidget {
   const HtmlMessageView({
     super.key,
@@ -24,6 +27,7 @@ class HtmlMessageView extends StatelessWidget {
   final double height;
   final ValueChanged<String>? onOpenUrl;
 
+  static final _styleTagPattern = RegExp(r'<style\b', caseSensitive: false);
   static final _bgcolorPattern = RegExp(r'\bbgcolor\s*=', caseSensitive: false);
   static final _inlineBgColorPattern = RegExp(
     r'background-color\s*:\s*(?!transparent\b|inherit\b|initial\b|unset\b)[^;"'
@@ -40,10 +44,11 @@ class HtmlMessageView extends StatelessWidget {
     caseSensitive: false,
   );
 
-  /// Mail that paints its own background or explicit ink colors keeps a light
-  /// sheet, so dark text and logos designed for a white canvas stay readable
-  /// in dark mode.
+  /// Mail that paints its own background, carries a `<style>` sheet, or sets
+  /// explicit ink colors keeps a light sheet so dark text and logos designed
+  /// for a white canvas stay readable in dark mode.
   static bool isDesigned(String html) =>
+      _styleTagPattern.hasMatch(html) ||
       _bgcolorPattern.hasMatch(html) ||
       _inlineBgColorPattern.hasMatch(html) ||
       _inlineColorPattern.hasMatch(html);
@@ -52,19 +57,36 @@ class HtmlMessageView extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
     final designed = isDesigned(html);
+    final ink = ColectoPalette.toHex(p.bodyInk);
+    final link = ColectoPalette.toHex(p.accent);
+    final bg = ColectoPalette.toHex(p.bg);
+
     final frame = buildWebSandboxedHtmlIframe(
       html,
       designed: designed,
-      ink: ColectoPalette.toHex(p.bodyInk),
-      link: ColectoPalette.toHex(p.accent),
+      ink: ink,
+      link: link,
       height: height,
     );
     if (frame != null) return frame;
-    return NativeSanitizedHtmlView(
+
+    final fallback = NativeSanitizedHtmlView(
       html: html,
       plainTextFallback: plainTextFallback,
       designed: designed,
       onOpenUrl: onOpenUrl,
     );
+
+    final webView = buildPlatformSandboxedWebView(
+      sanitizedHtml: html,
+      designed: designed,
+      ink: ink,
+      link: link,
+      bg: bg,
+      height: height,
+      fallback: fallback,
+      onOpenUrl: onOpenUrl,
+    );
+    return webView ?? fallback;
   }
 }

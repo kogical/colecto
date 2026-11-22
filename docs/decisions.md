@@ -28,7 +28,7 @@ Before building all screens, validate these two technical risks first:
 1. **Linux (Wayland) HTML Email WebView Spike:**
    - Flutter's official `webview_flutter` does not support Linux.
    - Verify an embedded sandboxed HTML email renderer on Linux/Wayland (and Android/Web) inside a scrollable conversation view, supporting dynamic content height, remote-image blocking, and external link interception.
-   - *Interim status:* Web renders sanitized HTML inside a real `<iframe sandbox>` (`html_message_iframe_web.dart`), while Desktop and Mobile currently render Rust-sanitized HTML natively via `NativeSanitizedHtmlView` (zero WebView RAM) until a pooled cross-platform WebView is wired in.
+   - *Current implementation:* Web renders sanitized HTML inside a real `<iframe sandbox>` (`html_message_iframe_web.dart`), while Desktop and Mobile render Rust-sanitized HTML (with safe, URL-free inline CSS preserved via `ammonia::Builder::filter_style_properties`) into a native HTML5/CSS Flutter widget tree (`NativeSanitizedHtmlView` via `flutter_widget_from_html_core`, zero WebView RAM, light sheet for designed corporate emails, exact icon sizing and viewport-capped banners/tables). Regression tests in `app/test/html_email_renderer_test.dart` verify 5 complex real-world corporate email templates at both desktop and 360px phone widths.
 2. **`flutter_rust_bridge` + `colecto-core` Skeleton Spike:**
    - Wire `colecto-service` into `colecto-ffi` (account list + folder/message fetch + event stream), generate Dart bindings with `frb_codegen`, and verify builds on Linux desktop, Android, and Flutter Web (talking to `colecto-daemon` over HTTP/SSE).
 

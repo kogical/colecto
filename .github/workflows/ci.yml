@@ -44,12 +44,12 @@ jobs:
               - 'Cargo.lock'
               - '.config/nextest.toml'
               - 'crates/**'
-              - 'just/**'
+              - 'scripts/just/**'
               - 'justfile'
               - '.github/workflows/ci.yml'
             flutter:
               - 'app/**'
-              - 'just/**'
+              - 'scripts/just/**'
               - 'justfile'
               - '.github/workflows/ci.yml'
             docker:

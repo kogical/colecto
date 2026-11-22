@@ -1,4 +1,4 @@
-set working-directory := '..'
+set working-directory := '../..'
 
 # Build all Rust crates (debug) and the Flutter Web bundle.
 [default]

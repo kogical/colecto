@@ -1,4 +1,4 @@
-set working-directory := '..'
+set working-directory := '../..'
 j := just_executable() + " --justfile " + quote(justfile_directory() / "justfile")
 
 # Run the fast parallel test suites (Rust + Flutter).

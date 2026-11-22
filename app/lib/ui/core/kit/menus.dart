@@ -54,9 +54,11 @@ class ColectoMenuItem {
   final bool header;
 }
 
-/// Shows a context menu: a popover that grows from the pointer on desktop
-/// and web, a Cupertino action sheet on iOS, a Material bottom sheet on
-/// Android.
+/// Shows a context menu for right-click (desktop) or long-press (touch).
+///
+/// Only use this for secondary-click / long-tap context menus. For normal
+/// button taps on touch/mobile, use [showColectoModalPicker] or a dedicated
+/// modal route (`colectoModalRoute`) instead.
 Future<void> showColectoContextMenu({
   required BuildContext context,
   required Offset globalPosition,
@@ -76,6 +78,143 @@ Future<void> showColectoContextMenu({
         anchor: globalPosition & Size.zero,
         items: items,
       );
+  }
+}
+
+/// Opens a modal screen/sheet listing [items] for normal taps on touch/mobile
+/// (so context menus stay reserved exclusively for right-click / long-press).
+Future<void> showColectoModalPicker({
+  required BuildContext context,
+  required String title,
+  required List<ColectoMenuItem> items,
+}) async {
+  final style = colectoPlatformStyle(context);
+  VoidCallback? chosen;
+  await Navigator.of(context).push<void>(
+    colectoModalRoute(
+      context,
+      style: style,
+      fullscreen: style == ColectoPlatformStyle.android,
+      builder: (ctx) => _ColectoModalPickerPage(
+        title: title,
+        items: items,
+        onPicked: (cb) {
+          chosen = cb;
+          Navigator.of(ctx).pop();
+        },
+      ),
+    ),
+  );
+  chosen?.call();
+}
+
+class _ColectoModalPickerPage extends StatelessWidget {
+  const _ColectoModalPickerPage({
+    required this.title,
+    required this.items,
+    required this.onPicked,
+  });
+
+  final String title;
+  final List<ColectoMenuItem> items;
+  final ValueChanged<VoidCallback?> onPicked;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return ColoredBox(
+      color: p.bg,
+      child: Column(
+        children: [
+          ColectoNavBar(
+            title: title,
+            onClose: () => Navigator.of(context).pop(),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                for (final item in items)
+                  if (item.divider)
+                    Divider(height: 12, color: p.lineSoft)
+                  else if (item.header)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+                      child: Text(
+                        item.label,
+                        style: kStyle(
+                          11,
+                          weight: 600,
+                          color: p.ink3,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    )
+                  else
+                    ColectoPressable(
+                      onTap: item.enabled
+                          ? () => onPicked(item.onSelected)
+                          : null,
+                      builder: (context, s) => Opacity(
+                        opacity: item.enabled ? 1 : 0.45,
+                        child: Container(
+                          color: s.hovered ? p.raise : const Color(0x00000000),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 13,
+                          ),
+                          child: Row(
+                            children: [
+                              if (item.icon != null) ...[
+                                Icon(
+                                  item.icon,
+                                  size: 18,
+                                  color: item.danger ? p.danger : p.ink2,
+                                ),
+                                const SizedBox(width: 14),
+                              ],
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      item.label,
+                                      style: kStyle(
+                                        15,
+                                        weight: 500,
+                                        color: item.danger ? p.danger : p.ink,
+                                      ).copyWith(fontFamily: item.fontFamily),
+                                    ),
+                                    if (item.subtitle != null)
+                                      Text(
+                                        item.subtitle!,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: kStyle(12.5, color: p.ink3),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              if (item.checked == true) ...[
+                                const SizedBox(width: 12),
+                                Icon(
+                                  LucideIcons.check,
+                                  size: 18,
+                                  color: p.accent,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

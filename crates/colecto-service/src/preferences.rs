@@ -31,6 +31,8 @@ pub struct Preferences {
     /// account is off, every other account on. Off accounts are hidden from the workspace and
     /// never refreshed, watched or prefetched in the background.
     pub accounts_enabled: BTreeMap<String, bool>,
+    /// Owner-chosen order of account IDs in Settings and the account switcher.
+    pub account_order: Vec<String>,
     /// Set once the owner finished or skipped first-run onboarding.
     pub onboarded: bool,
     pub list_density: ListDensity,
@@ -63,6 +65,7 @@ impl Default for Preferences {
             auto_load_more: true,
             notified_release: None,
             accounts_enabled: BTreeMap::new(),
+            account_order: Vec::new(),
             onboarded: false,
             prefetch: Prefetch::default(),
         }
@@ -182,6 +185,7 @@ pub struct PreferencesInput {
     pub notifications: Option<Notifications>,
     pub remote_images: Option<bool>,
     pub accounts_enabled: Option<BTreeMap<String, bool>>,
+    pub account_order: Option<Vec<String>>,
     pub onboarded: Option<bool>,
     pub list_density: Option<ListDensity>,
     pub date_groups: Option<bool>,
@@ -215,6 +219,14 @@ fn validate(preferences: &Preferences) -> Result<(), String> {
             .any(|id| id.is_empty() || id.len() > 128)
     {
         return Err("Invalid account on/off choices".into());
+    }
+    if preferences.account_order.len() > MAX_ACCOUNT_CHOICES
+        || preferences
+            .account_order
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 128)
+    {
+        return Err("Invalid account order".into());
     }
     if let Some(workspace) = &preferences.workspace
         && (!workspace.is_object()
@@ -346,6 +358,7 @@ impl PreferenceStore {
             next.account = None;
         }
         next.accounts_enabled.remove(id);
+        next.account_order.retain(|item| item != id);
         self.save(next, &[])
     }
 
@@ -403,6 +416,13 @@ impl PreferenceStore {
         }
         if let Some(choices) = input.accounts_enabled {
             next.accounts_enabled.extend(choices);
+        }
+        if let Some(order) = input.account_order {
+            let mut seen = BTreeSet::new();
+            next.account_order = order
+                .into_iter()
+                .filter(|id| seen.insert(id.clone()))
+                .collect();
         }
         if let Some(onboarded) = input.onboarded {
             next.onboarded = onboarded;

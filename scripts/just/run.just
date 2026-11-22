@@ -1,4 +1,4 @@
-set working-directory := '..'
+set working-directory := '../..'
 j := just_executable() + " --justfile " + quote(justfile_directory() / "justfile")
 
 # Build Flutter Web + colecto-daemon and serve both at http://127.0.0.1:4173 (Ctrl+C to stop).

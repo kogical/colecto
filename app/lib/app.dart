@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui' show AppExitResponse;
+
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:fluent_ui/fluent_ui.dart' show FluentLocalizations;
 import 'package:flutter/foundation.dart';
@@ -57,14 +60,50 @@ class ColectoApp extends StatefulWidget {
 }
 
 class _ColectoAppState extends State<ColectoApp> {
+  late final AppLifecycleListener _lifecycle;
+
+  bool get _isMobile =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onGlobalKey);
+    _lifecycle = AppLifecycleListener(
+      onExitRequested: () async {
+        if (widget.controller.hasPendingSends) {
+          await widget.controller.flushPendingSends();
+        }
+        return AppExitResponse.exit;
+      },
+      onInactive: () {
+        if (kIsWeb) {
+          unawaited(widget.controller.flushPendingSends());
+        }
+      },
+      onHide: () {
+        if (kIsWeb || _isMobile) {
+          unawaited(widget.controller.flushPendingSends());
+        }
+      },
+      onPause: () {
+        if (_isMobile) {
+          unawaited(widget.controller.flushPendingSends());
+        }
+      },
+      onDetach: () {
+        if (_isMobile) {
+          unawaited(widget.controller.flushPendingSends());
+        }
+      },
+    );
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     HardwareKeyboard.instance.removeHandler(_onGlobalKey);
     super.dispose();
   }

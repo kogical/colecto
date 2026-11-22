@@ -373,6 +373,7 @@ class InMemoryMailBackend implements MailBackend {
           : (patch.notifications ?? _preferences.notifications),
       remoteImages: patch.remoteImages ?? _preferences.remoteImages,
       accountsEnabled: enabled,
+      accountOrder: patch.accountOrder ?? _preferences.accountOrder,
       onboarded: patch.onboarded ?? _preferences.onboarded,
       listDensity: patch.listDensity ?? _preferences.listDensity,
       dateGroups: patch.dateGroups ?? _preferences.dateGroups,

@@ -58,6 +58,7 @@ class _ComposerViewState extends State<ComposerView> {
     _cc = TextEditingController(text: r.cc);
     _subject = TextEditingController(text: r.subject);
     _body = TextEditingController(text: r.body);
+    _attachments.addAll(r.attachments);
     _baseline = _snapshot();
     for (final t in [_to, _cc, _subject, _body]) {
       t.addListener(_changed);
@@ -157,22 +158,15 @@ class _ComposerViewState extends State<ComposerView> {
       );
       if (!ok || !mounted) return;
     }
-    setState(() => _state = _SaveState.sending);
-    final outcome = await c.sendMail(_input());
-    if (!mounted) return;
-    if (outcome != null) {
-      setState(() => _state = _SaveState.sent);
-      widget.onClose();
-    } else {
-      setState(() => _state = _SaveState.idle);
-    }
+    setState(() => _state = _SaveState.sent);
+    c.scheduleSend(_input());
+    widget.onClose();
   }
 
   Future<void> _close() async {
     if (_dirty && _hasContent) {
       final ok = await _save();
       if (!mounted || !ok) return;
-      c.showToast('Draft saved', detail: 'Find it in Drafts.');
     }
     _discarded = true;
     widget.onClose();

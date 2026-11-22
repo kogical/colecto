@@ -200,6 +200,49 @@ void _requestWorkerEntry(List<Object?> args) {
   });
 }
 
+/// Additional request worker isolate that shares the already-initialized Rust
+/// `FfiSession` so concurrent requests (e.g. clicking an email while IMAP sync
+/// runs) never serialize behind a single blocking isolate.
+void _extraRequestWorkerEntry(List<Object?> args) {
+  final replyPort = args[0]! as SendPort;
+  final libraryPath = args[1] as String?;
+  final debugMode = args[2]! as bool;
+
+  final _FfiSymbols syms;
+  try {
+    syms = _FfiSymbols.open(libraryPath: libraryPath, debugMode: debugMode);
+  } catch (e) {
+    replyPort.send(<Object?>['init_error', e.toString()]);
+    return;
+  }
+
+  final inbox = ReceivePort();
+  replyPort.send(<Object?>['ready', inbox.sendPort]);
+
+  inbox.listen((message) {
+    if (message is! List<Object?> || message.isEmpty) return;
+    final kind = message[0] as String;
+    if (kind == 'stop') {
+      inbox.close();
+      return;
+    }
+    if (kind == 'request') {
+      final reqJson = message[1]! as String;
+      final port = message[2]! as SendPort;
+      final reqPtr = syms.toCString(reqJson);
+      try {
+        final respPtr = syms.request(reqPtr);
+        final raw = syms.consumeCString(respPtr);
+        port.send(<Object?>['ok', raw]);
+      } catch (e) {
+        port.send(<Object?>['err', e.toString()]);
+      } finally {
+        _FfiSymbols._freeCString(reqPtr);
+      }
+    }
+  });
+}
+
 /// Dedicated event-polling isolate that waits on Rust's `colecto_ffi_poll_event`
 /// without blocking either the UI isolate or the request worker isolate.
 void _eventWorkerEntry(List<Object?> args) {
@@ -255,9 +298,14 @@ class NativeFfiBridge {
   final String? dataDir;
   final String? libraryPath;
 
+  static const _extraWorkerCount = 3;
+
   Future<SendPort>? _workerPortFuture;
   SendPort? _workerPort;
   Isolate? _workerIsolate;
+  final List<SendPort> _extraWorkerPorts = [];
+  final List<Isolate> _extraWorkerIsolates = [];
+  int _nextWorker = 0;
   bool _disposed = false;
 
   Future<SendPort> _ensureWorker() {
@@ -277,7 +325,7 @@ class NativeFfiBridge {
         dataDir ?? await _mobileDataDir(),
         libraryPath,
         kDebugMode,
-      ], debugName: 'colecto-ffi-worker');
+      ], debugName: 'colecto-ffi-worker-0');
       final msg = await initPort.first as List<Object?>;
       if (msg[0] == 'init_error') {
         isolate.kill(priority: Isolate.immediate);
@@ -286,6 +334,8 @@ class NativeFfiBridge {
       }
       _workerIsolate = isolate;
       _workerPort = msg[1]! as SendPort;
+      // Spawn extra workers in the background once the Rust session is live.
+      unawaited(_spawnExtraWorkers());
       return _workerPort!;
     } catch (e) {
       _workerPortFuture = null;
@@ -293,6 +343,38 @@ class NativeFfiBridge {
     } finally {
       initPort.close();
     }
+  }
+
+  Future<void> _spawnExtraWorkers() async {
+    for (var i = 0; i < _extraWorkerCount; i++) {
+      if (_disposed) return;
+      final port = ReceivePort();
+      try {
+        final isolate = await Isolate.spawn(_extraRequestWorkerEntry, <Object?>[
+          port.sendPort,
+          libraryPath,
+          kDebugMode,
+        ], debugName: 'colecto-ffi-worker-${i + 1}');
+        final msg = await port.first as List<Object?>;
+        if (_disposed || msg[0] != 'ready') {
+          isolate.kill(priority: Isolate.immediate);
+        } else {
+          _extraWorkerIsolates.add(isolate);
+          _extraWorkerPorts.add(msg[1]! as SendPort);
+        }
+      } catch (_) {
+        // Primary worker still handles all requests if extra spawn fails.
+      } finally {
+        port.close();
+      }
+    }
+  }
+
+  SendPort _pickWorker(SendPort primary) {
+    if (_extraWorkerPorts.isEmpty) return primary;
+    final total = 1 + _extraWorkerPorts.length;
+    final idx = _nextWorker++ % total;
+    return idx == 0 ? primary : _extraWorkerPorts[idx - 1];
   }
 
   /// Android and iOS keep app data in their sandbox, which only the platform can
@@ -313,7 +395,8 @@ class NativeFfiBridge {
     String? account,
     String? body,
   }) async {
-    final worker = await _ensureWorker();
+    final primary = await _ensureWorker();
+    final worker = _pickWorker(primary);
     final reqJson = jsonEncode({
       'method': method,
       'path': path,
@@ -405,6 +488,11 @@ class NativeFfiBridge {
 
   void dispose() {
     _disposed = true;
+    for (final extraPort in _extraWorkerPorts) {
+      extraPort.send(const <Object?>['stop']);
+    }
+    _extraWorkerPorts.clear();
+    _extraWorkerIsolates.clear();
     final port = _workerPort;
     _workerPort = null;
     _workerPortFuture = null;

@@ -43,6 +43,7 @@ dependencies:
   web: ^1.1.0
   flutter_widget_from_html_core: ^0.17.4
   html: ^0.15.7
+  flutter_inappwebview: ^6.1.5
 
 dev_dependencies:
   flutter_test:

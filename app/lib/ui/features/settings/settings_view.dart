@@ -9,10 +9,11 @@ import 'ai_settings_tab.dart';
 import 'automation_tabs.dart';
 import 'mail_appearance_tabs.dart';
 
-/// Colecto's Settings card: a section list on the left, a breadcrumb and a
-/// close button over the page. It floats over the workspace (which stays
-/// mounted behind it); on phones it fills the screen and the sections
-/// scroll sideways above the page.
+/// Colecto's Settings: a section list on the left, a breadcrumb and a close
+/// button over the page, inside the design's own modal (see
+/// `colectoModalRoute`). On phones it starts at the section list and each
+/// section opens as its own page; in a narrow window the sections scroll
+/// sideways above the page.
 class SettingsView extends StatefulWidget {
   const SettingsView({super.key, required this.controller, this.phone = false});
 
@@ -127,6 +128,8 @@ class _SettingsViewState extends State<SettingsView> {
           ),
         );
 
+        if (widget.phone) return _phone(context, section, page);
+
         if (!wide) {
           return ColoredBox(
             color: p.bg,
@@ -154,51 +157,6 @@ class _SettingsViewState extends State<SettingsView> {
                           dense: true,
                           onTap: () => c.openSettings(s),
                         ),
-                    ],
-                  ),
-                ),
-                Expanded(child: page),
-              ],
-            ),
-          );
-        }
-
-        if (colectoPlatformStyle(context) == ColectoPlatformStyle.macos) {
-          // A macOS Settings window: icon tabs across a toolbar.
-          return ColoredBox(
-            color: p.bg,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: p.float,
-                    border: Border(bottom: BorderSide(color: p.lineSoft)),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: [
-                              for (final s in c.visibleSettingsSections)
-                                _MacTab(
-                                  section: s,
-                                  selected: s == section,
-                                  badge: _badge(s),
-                                  onTap: () => c.openSettings(s),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      ColectoIconButton(
-                        icon: LucideIcons.x,
-                        tooltip: 'Close settings (Esc)',
-                        onPressed: c.closeSettings,
-                      ),
                     ],
                   ),
                 ),
@@ -258,6 +216,58 @@ class _SettingsViewState extends State<SettingsView> {
           ],
         );
       },
+    );
+  }
+
+  /// Phones: the section list, then each section as a page. Back (the
+  /// button, the system gesture) returns to the list.
+  Widget _phone(BuildContext context, SettingsSection section, Widget page) {
+    final p = ColectoPalette.of(context);
+    final c = widget.controller;
+    final index = c.showsSettingsIndex;
+    return PopScope(
+      canPop: index,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) c.showSettingsIndex();
+      },
+      child: ColoredBox(
+        color: p.bg,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ColectoNavBar(
+              // A page's large title sits at the top of its content.
+              title: index ? 'Settings' : '',
+              backLabel: 'Settings',
+              onBack: index ? null : c.showSettingsIndex,
+              onClose: c.closeSettings,
+            ),
+            Expanded(
+              child: index
+                  ? ListView(
+                      padding: EdgeInsets.only(
+                        top: 8,
+                        bottom: 24 + MediaQuery.paddingOf(context).bottom,
+                      ),
+                      children: [
+                        ColectoNavList(
+                          entries: [
+                            for (final s in c.visibleSettingsSections)
+                              (
+                                icon: s.icon,
+                                label: s.label,
+                                badge: _badge(s),
+                                onTap: () => c.openSettings(s),
+                              ),
+                          ],
+                        ),
+                      ],
+                    )
+                  : page,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -379,67 +389,6 @@ class _NavItem extends StatelessWidget {
               ],
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A macOS Settings toolbar tab: an icon over its name.
-class _MacTab extends StatelessWidget {
-  const _MacTab({
-    required this.section,
-    required this.selected,
-    required this.onTap,
-    this.badge = 0,
-  });
-
-  final SettingsSection section;
-  final bool selected;
-  final VoidCallback onTap;
-  final int badge;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    return ColectoPressable(
-      onTap: onTap,
-      selected: selected,
-      semanticLabel: section.label,
-      pressScale: 1,
-      focusRadius: 6,
-      builder: (context, s) => Container(
-        constraints: const BoxConstraints(minWidth: 72),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        margin: const EdgeInsets.only(right: 2),
-        decoration: BoxDecoration(
-          color: selected
-              ? p.ink.withValues(alpha: 0.1)
-              : s.hovered
-              ? p.ink.withValues(alpha: 0.05)
-              : const Color(0x00000000),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Badge(
-              isLabelVisible: badge > 0,
-              backgroundColor: p.accent,
-              smallSize: 7,
-              child: Icon(
-                section.icon,
-                size: 20,
-                color: selected ? p.accent : p.ink2,
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              section.label,
-              maxLines: 1,
-              style: kStyle(11, color: selected ? p.ink : p.ink2),
-            ),
-          ],
         ),
       ),
     );

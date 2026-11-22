@@ -9,8 +9,8 @@ Drop dockable/split game-engine panes. Use a proven adaptive mail layout:
 | Viewport | Layout | Navigation |
 | --- | --- | --- |
 | **Phone** (`< 600px`) | Single-column navigation stack | Bottom nav or drawer (Inbox / Folders / Search) → Thread List (swipe actions, pull-to-refresh, compose FAB/button) → Pushed Thread Reader (native back gesture) → Compose sheet |
-| **Tablet / Compact Desktop** (`600–1050px`) | Collapsible rail + master-detail split | Rail for accounts/folders, list + reader side-by-side or stacked on narrow panes |
-| **Desktop / Wide Web** (`> 1050px`) | Classic 3-pane | Accounts & Folders sidebar \| Thread List \| Reading Pane, plus `Cmd/Ctrl+K` command palette |
+| **Tablet / Compact Desktop** (`600–1050px`) | Colecto two-column, narrower Mail pane | Same as desktop |
+| **Desktop / Wide Web** (`> 1050px`) | Colecto two-column | Top bar \| Mail pane (search + Compose, Inbox/Drafts/Sent tabs with More, labels, list, account switcher) \| Reader, plus `Cmd/Ctrl+K` command palette |
 
 ## Per-Platform Design Systems
 
@@ -19,10 +19,10 @@ Share the controller, `MailBackend`, layouts and mail views, and branch only in 
 | Design (`COLECTO_DESIGN`) | Library | Native on | Signature details |
 | --- | --- | --- | --- |
 | `colecto` | `shadcn_ui` + Colecto palette | Linux, Web | Colecto top bar with centred command trigger, Compose beside search, glowing mint selection node, Mona Sans |
-| `fluent` | `fluent_ui` | Windows | 48 px title bar (small icon + name, Fluent search box), *New mail* atop a Mica-ground navigation pane, accent selection pills, sender pictures in rows, labelled command bar, Segoe UI Variable, 4 px radii |
-| `macos` | `macos_ui` | macOS | 52 px unified toolbar with room for traffic lights, mailbox title and count over the list, compose and search on the right, accent-tinted source list, accent-filled selected row and unread dot, icon-only toolbar, Settings as an icon-tab window |
-| `material` | `material_ui` + `dynamic_color` | Android | Pill search bar, Compose FAB atop a navigation drawer with pill indicators, sender pictures in rows; on phones a large app bar, `NavigationBar`, extended FAB and bottom sheets; Material You colours |
-| `cupertino` | `cupertino_ui` | iOS | iPadOS sidebar (large *Mailboxes* title, accent-filled selected row); on phones a large-title navigation bar, tab bar, action sheets and edge-swipe back |
+| `fluent` | `fluent_ui` | Windows | 48 px Mica title bar (small icon + name, Fluent search box), sender pictures in rows, labelled command bar, Settings as a `ContentDialog` over the smoke layer, Segoe UI Variable, 4 px radii |
+| `macos` | `macos_ui` | macOS | 52 px unified toolbar with room for traffic lights, folder tabs like a favourites bar, accent-filled selected row and unread dot, icon-only toolbar, Settings as a sheet |
+| `material` | `material_ui` + `dynamic_color` | Android | Pill search bar, sender pictures in rows, Settings as an M3 dialog; on phones a large app bar, `NavigationBar`, extended FAB, bottom sheets and full-screen dialogs; Material You colours |
+| `cupertino` | `cupertino_ui` | iOS | Settings and the phone composer as card sheets; on phones a large-title navigation bar, tab bar, inset grouped Settings list, action sheets and edge-swipe back |
 
 ### The Colecto kit
 
@@ -38,6 +38,8 @@ Feature code never imports a design library. Widget tests render every design at
 | `ColectoSegmented` | Colecto segmented | `ToggleButton` row | `MacosSegmentedControl` | `SegmentedButton` | `CupertinoSlidingSegmentedControl` |
 | `ColectoSelect` | `ShadSelect` | `ComboBox` | `MacosPopupButton` | `DropdownMenu` | action sheet |
 | `showColectoConfirm` / `showColectoPrompt` | `ShadDialog.alert` | `ContentDialog` | `MacosAlertDialog` | `AlertDialog` | `CupertinoAlertDialog` |
+| `colectoModalRoute` (Settings) | card rising over a scrim | `FluentDialogRoute` with `ContentDialog` surface | sheet | `Dialog` (full-screen dialog on phones) | `CupertinoSheetRoute` |
+| `ColectoNavBar` / `ColectoNavList` (phone pages) | slim bar, Colecto rows | slim bar, Colecto rows | slim bar, Colecto rows | top app bar, `ListTile`s | `CupertinoNavigationBar` with *Done*, inset grouped list |
 | `showColectoContextMenu` | popover from the pointer | Fluent-metric popover | macOS-metric popover | bottom sheet | action sheet |
 | `ColectoText` / `ColectoParagraph` | role → Colecto ramp | Windows type ramp | macOS ramp | M3 type scale | iOS Dynamic Type sizes |
 
@@ -65,7 +67,7 @@ Each platform starts with its own design, but **any design works on any platform
 - Full keyboard navigation: `j`/`k` (or arrows) move, `e` archive, `#`/Delete trash, `s` star, `u` unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search, `Esc` back out, `Cmd/Ctrl+K` command palette, `Cmd/Ctrl+,` settings. Every shortcut also has a pointer path.
 - Light and dark mode both supported; the default follows the system.
 - `Cmd/Ctrl +`, `-` and `0` zoom the whole interface like a browser (50–200 %, saved as `Preferences.zoom`); on touch designs the same setting is *Interface size* in Settings → Appearance.
-- Send approvals appear (sidebar, Settings, command palette) only while a request is waiting.
+- Send approvals appear (top bar, Settings, command palette) only while a request is waiting.
 
 ### Android
 
@@ -77,13 +79,13 @@ Large-title list, tab bar for Inbox/Drafts/Sent/Archive/More, edge-swipe back fr
 
 ## Layout and behaviour carried over from Colecto
 
-- **Top bar** (desktop designs): brand, a centred `Search mail or run a command` trigger with its shortcut, account switcher with live sync status, Settings.
-- **Mail pane:** search with Compose beside it, label filter chips with an inline *New label* field, sticky date groups, rows that become single lines when the pane is wide, hover actions (archive, read/unread, trash), Cmd/Ctrl-click and Shift-click selection with a bulk bar, and a footer with the conversation count and sync status. The list/reader divider can be dragged, nudged with the arrow keys, and double-clicked to reset.
+- **Top bar** (every design at desktop width, drawn as its title bar or toolbar): brand, a centred `Search mail or run a command` trigger with its shortcut, Send approvals while one waits, Settings.
+- **Mail pane:** search with Compose beside it, Inbox/Drafts/Sent tabs (every other folder under More), label filter chips with an inline *New label* field, sticky date groups, rows that become single lines when the pane is wide, hover actions (archive, read/unread, trash), Cmd/Ctrl-click and Shift-click selection with a bulk bar, and a footer with the conversation count and sync status, then the account switcher with live sync status. The list/reader divider can be dragged, nudged with the arrow keys, and double-clicked to reset.
 - **Reader:** a sticky translucent toolbar, a centred letter (large subject, sender row with a stable per-correspondent avatar hue, label toggles, attachments that save to disk, 68ch body), earlier messages folded to one line, AI summary and reply drafting, and a welcome state with a time-of-day greeting.
 - **Composer:** opens in the reader (a full-screen page on phones) with From/To/Cc/Subject rows, a save-state line, real file attachments, Cmd/Ctrl+Enter to send and Cmd/Ctrl+S to save. Closing with unsaved changes keeps them as a draft.
-- **Settings:** a card over the workspace (full screen on phones) with a section list, breadcrumb and close button; groups are hairline sections, not cards.
+- **Settings:** the design's own modal (see `colectoModalRoute`) with a section list, breadcrumb and close button; groups are hairline sections, not cards, and each setting is a row with its label and description on the left and the control on the right (under the text when the page is narrow). On phones it opens at the section list and each section is a page; Back returns to the list.
 - **Notifications:** enter from the edge they are docked to, leave after six seconds unless hovered.
-- **Motion:** presses scale to 0.97, menus grow from their trigger in ~200 ms, the Settings card rises 6 px in 220 ms, the command palette opens instantly, and reduced-motion turns transitions off.
+- **Motion:** presses scale to 0.97, menus grow from their trigger in ~200 ms, the Colecto Settings card rises 6 px in 220 ms (other designs use their own modal motion), the command palette opens instantly, and reduced-motion turns transitions off.
 
 ## Visual Identity: Colecto Palette + Native Controls
 

@@ -15,15 +15,14 @@ import '../reader/reader_pane.dart';
 import '../settings/settings_view.dart';
 import 'command_palette.dart';
 import 'mail_controller.dart';
-import 'sidebar_pane.dart';
+import 'folders.dart';
 import 'top_bar.dart';
 
-/// Adaptive 3-tier mail shell (`docs/ui-design.md`):
+/// Adaptive mail shell (`docs/ui-design.md`):
 /// - Phone (`< 600px`): a native navigation stack — large-title list, a
 ///   bottom folder bar, and pushed reader, composer and settings pages.
-/// - Tablet / compact desktop (`600–1050px`): icon rail, list and reader.
-/// - Desktop / wide web (`> 1050px`): sidebar, list and reader under
-///   Colecto's top bar, with Settings as a card over the workspace.
+/// - Wider: Colecto's two-column workspace (Mail pane and reader) under
+///   the top bar, with Settings in the design's own modal.
 class MailShell extends StatefulWidget {
   const MailShell({super.key, required this.controller});
 
@@ -229,15 +228,10 @@ class _MailShellState extends State<MailShell> {
                     _Workspace(
                       controller: c,
                       searchFocus: _searchFocus,
-                      compactSidebar: width <= 1050,
+                      compact: width <= 1050,
                       onCompose: _compose,
                       onOpenDraft: _openDraft,
                       onOpenCommandPalette: _openCommandPalette,
-                    ),
-                    _Presence(
-                      visible: c.activeSettings != null,
-                      builder: (context, a) =>
-                          _SettingsCard(controller: c, animation: a),
                     ),
                     toasts,
                   ],
@@ -257,7 +251,7 @@ class _Workspace extends StatefulWidget {
   const _Workspace({
     required this.controller,
     required this.searchFocus,
-    required this.compactSidebar,
+    required this.compact,
     required this.onCompose,
     required this.onOpenDraft,
     required this.onOpenCommandPalette,
@@ -265,7 +259,7 @@ class _Workspace extends StatefulWidget {
 
   final MailController controller;
   final FocusNode searchFocus;
-  final bool compactSidebar;
+  final bool compact;
   final ValueChanged<ComposeRequest> onCompose;
   final ValueChanged<Draft> onOpenDraft;
   final VoidCallback onOpenCommandPalette;
@@ -274,96 +268,197 @@ class _Workspace extends StatefulWidget {
   State<_Workspace> createState() => _WorkspaceState();
 }
 
+/// Colecto's two-column workspace under the top bar: the Mail pane (search
+/// and Compose, folder tabs, labels, the list, its footer and the account
+/// switcher) beside the reader. Settings open as the design's own modal.
 class _WorkspaceState extends State<_Workspace> {
   double? _listWidth;
+  late final _settings = _ModalSlot(_sync);
+  NavigatorState? _navigator;
+
+  MailController get c => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    c.addListener(_sync);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _navigator = Navigator.maybeOf(context);
+  }
+
+  @override
+  void dispose() {
+    c.removeListener(_sync);
+    // Shrinking to phone width swaps in the phone shell, which opens its
+    // own Settings page.
+    _settings.dispose(_navigator);
+    super.dispose();
+  }
+
+  void _sync() => _settings.sync(
+    mounted ? _navigator : null,
+    open: c.activeSettings != null,
+    design: c.design,
+    build: () => colectoModalRoute(
+      context,
+      builder: (_) => ListenableBuilder(
+        listenable: c,
+        builder: (_, _) => SettingsView(controller: c),
+      ),
+    ),
+    onDismissed: c.closeSettings,
+  );
 
   @override
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
-    final c = widget.controller;
-    final settingsOpen = c.activeSettings != null;
-    final style = colectoPlatformStyle(context);
-    final sidebar = sidebarWidth(style, compact: widget.compactSidebar);
     void compose() => widget.onCompose(const ComposeRequest());
-    // Where Compose lives is part of each platform's idiom: beside search
-    // (Colecto, iPadOS), atop the navigation pane (Fluent's New mail,
-    // Material's FAB) or in the toolbar (macOS).
-    final composeInList =
-        style == ColectoPlatformStyle.desktop ||
-        style == ColectoPlatformStyle.ios;
-    final composeInSidebar =
-        style == ColectoPlatformStyle.fluent ||
-        style == ColectoPlatformStyle.android;
-    return ExcludeFocus(
-      excluding: settingsOpen,
-      child: Column(
-        children: [
-          ColectoTopBar(
-            controller: c,
-            onOpenCommandPalette: widget.onOpenCommandPalette,
-            onCompose: compose,
-            sidebarWidth: sidebar,
-          ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final fallback = widget.compactSidebar ? 320.0 : 360.0;
-                final maxList = (constraints.maxWidth - sidebar - 360).clamp(
-                  260.0,
-                  620.0,
-                );
-                final listWidth = (_listWidth ?? fallback).clamp(
-                  260.0,
-                  maxList,
-                );
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SidebarPane(
-                      controller: c,
-                      compact: widget.compactSidebar,
-                      width: sidebar,
-                      onCompose: composeInSidebar ? compose : null,
-                    ),
-                    Container(width: 1, color: p.lineSoft),
-                    SizedBox(
-                      width: listWidth,
-                      child: MessageListPane(
-                        controller: c,
-                        searchFocusNode: widget.searchFocus,
-                        onOpenDraft: widget.onOpenDraft,
-                        onThreadSelected: c.selectThread,
-                        onCompose: composeInList ? compose : null,
-                      ),
-                    ),
-                    _Gutter(
-                      onDrag: (dx) => setState(
-                        () =>
-                            _listWidth = (listWidth + dx).clamp(260.0, maxList),
-                      ),
-                      onReset: () => setState(() => _listWidth = null),
-                    ),
-                    Expanded(
-                      child: c.compose != null
-                          ? ComposerView(
-                              key: ValueKey('compose-${c.composeKey}'),
+    return Column(
+      children: [
+        ColectoTopBar(
+          controller: c,
+          onOpenCommandPalette: widget.onOpenCommandPalette,
+        ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final fallback = widget.compact ? 300.0 : 344.0;
+              final maxList = (constraints.maxWidth - 360).clamp(260.0, 620.0);
+              final listWidth = (_listWidth ?? fallback).clamp(260.0, maxList);
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: listWidth,
+                    child: ColoredBox(
+                      color: p.bg,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: MessageListPane(
                               controller: c,
-                              request: c.compose!,
-                              onClose: c.closeCompose,
-                            )
-                          : ReaderPane(
-                              controller: c,
-                              onCompose: widget.onCompose,
+                              searchFocusNode: widget.searchFocus,
+                              onOpenDraft: widget.onOpenDraft,
+                              onThreadSelected: c.selectThread,
+                              onCompose: compose,
+                              folderTabs: true,
                             ),
+                          ),
+                          _AccountsBar(controller: c),
+                        ],
+                      ),
                     ),
-                  ],
-                );
-              },
-            ),
+                  ),
+                  _Gutter(
+                    onDrag: (dx) => setState(
+                      () => _listWidth = (listWidth + dx).clamp(260.0, maxList),
+                    ),
+                    onReset: () => setState(() => _listWidth = null),
+                  ),
+                  Expanded(
+                    child: c.compose != null
+                        ? ComposerView(
+                            key: ValueKey('compose-${c.composeKey}'),
+                            controller: c,
+                            request: c.compose!,
+                            onClose: c.closeCompose,
+                          )
+                        : ReaderPane(
+                            controller: c,
+                            onCompose: widget.onCompose,
+                          ),
+                  ),
+                ],
+              );
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
+  }
+}
+
+/// The foot of the Mail pane: the account switcher with live sync status.
+class _AccountsBar extends StatelessWidget {
+  const _AccountsBar({required this.controller});
+
+  final MailController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: p.lineSoft)),
+      ),
+      child: AccountSwitcher(controller: controller, expand: true),
+    );
+  }
+}
+
+/// One modal page that follows controller state: pushed as a real route
+/// when state asks for it, removed when state drops it, and reported back
+/// when the person dismisses it. A design switch re-presents it in the new
+/// design's modal once that design is in the tree.
+class _ModalSlot {
+  _ModalSlot(this._resync);
+
+  final VoidCallback _resync;
+  Route<void>? _route;
+  ColectoPlatformStyle? _design;
+  bool _waiting = false;
+
+  void sync(
+    NavigatorState? nav, {
+    required bool open,
+    required ColectoPlatformStyle design,
+    required Route<void> Function() build,
+    required VoidCallback onDismissed,
+  }) {
+    if (nav == null) return;
+    final shown = _route;
+    if (shown != null && (!open || design != _design)) {
+      _route = null;
+      if (open || !shown.isCurrent) {
+        if (shown.isActive) nav.removeRoute(shown);
+      } else {
+        nav.pop();
+      }
+      if (open) {
+        _waiting = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _waiting = false;
+          _resync();
+        });
+        return;
+      }
+    }
+    if (open && _route == null && !_waiting) {
+      final route = build();
+      _route = route;
+      _design = design;
+      nav.push(route).whenComplete(() {
+        if (_route == route) {
+          _route = null;
+          onDismissed();
+        }
+      });
+    }
+  }
+
+  void dispose(NavigatorState? nav) {
+    final shown = _route;
+    _route = null;
+    if (shown != null && shown.isActive && nav != null && nav.mounted) {
+      nav.removeRoute(shown);
+    }
   }
 }
 
@@ -438,138 +533,6 @@ class _NudgeIntent extends Intent {
   final double dx;
 }
 
-/// Keeps a child mounted while it animates out, and builds it with the
-/// running animation.
-class _Presence extends StatefulWidget {
-  const _Presence({required this.visible, required this.builder});
-
-  final bool visible;
-  final Widget Function(BuildContext, Animation<double>) builder;
-
-  @override
-  State<_Presence> createState() => _PresenceState();
-}
-
-class _PresenceState extends State<_Presence>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: ColectoMotion.card,
-    reverseDuration: const Duration(milliseconds: 160),
-    value: widget.visible ? 1 : 0,
-  );
-
-  @override
-  void didUpdateWidget(_Presence old) {
-    super.didUpdateWidget(old);
-    final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    if (widget.visible != old.visible) {
-      if (reduce) {
-        _c.value = widget.visible ? 1 : 0;
-      } else if (widget.visible) {
-        _c.forward();
-      } else {
-        _c.reverse();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      builder: (context, _) => _c.isDismissed
-          ? const SizedBox.shrink()
-          : widget.builder(context, _c),
-    );
-  }
-}
-
-/// Settings float as a card over the workspace, which stays mounted (and
-/// inert) behind a dimmed backdrop. The card rises 6 px and scales from
-/// 0.97 in 220 ms; Escape or a click on the backdrop closes it.
-class _SettingsCard extends StatelessWidget {
-  const _SettingsCard({required this.controller, required this.animation});
-
-  final MailController controller;
-  final Animation<double> animation;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    final forward = animation.status != AnimationStatus.reverse;
-    final t = (forward ? ColectoMotion.easeOut : Curves.easeIn).transform(
-      animation.value,
-    );
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            onTap: controller.closeSettings,
-            child: ColoredBox(color: p.scrim.withValues(alpha: p.scrim.a * t)),
-          ),
-        ),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final w = (constraints.maxWidth - 56).clamp(0.0, 1080.0);
-            final h = (constraints.maxHeight - 56).clamp(0.0, 780.0);
-            return Center(
-              child: Opacity(
-                opacity: t,
-                child: Transform.translate(
-                  offset: Offset(0, 6 * (1 - t)),
-                  child: Transform.scale(
-                    scale: 0.97 + 0.03 * t,
-                    child: Container(
-                      width: w,
-                      height: h,
-                      decoration: BoxDecoration(
-                        color: p.bg,
-                        borderRadius: BorderRadius.circular(
-                          switch (colectoPlatformStyle(context)) {
-                            ColectoPlatformStyle.fluent => 8,
-                            ColectoPlatformStyle.macos => 10,
-                            ColectoPlatformStyle.android => 28,
-                            ColectoPlatformStyle.ios => 14,
-                            ColectoPlatformStyle.desktop => 16,
-                          },
-                        ),
-                        border: Border.all(color: p.line),
-                        boxShadow: [
-                          BoxShadow(
-                            color: p.shadow.withValues(
-                              alpha: p.isDark ? 0.8 : 0.22,
-                            ),
-                            blurRadius: 100,
-                            spreadRadius: -30,
-                            offset: const Offset(0, 40),
-                          ),
-                          ...p.floatShadow.skip(1),
-                        ],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: FocusScope(
-                        autofocus: true,
-                        child: SettingsView(controller: controller),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
-
 // ───────────────────────────── Phones ─────────────────────────────
 
 class _PhoneShell extends StatefulWidget {
@@ -597,7 +560,7 @@ class _PhoneShell extends StatefulWidget {
 class _PhoneShellState extends State<_PhoneShell> {
   Route<void>? _reader;
   Route<void>? _composer;
-  Route<void>? _settings;
+  late final _settings = _ModalSlot(_sync);
   int? _composerKey;
 
   MailController get c => widget.controller;
@@ -623,8 +586,9 @@ class _PhoneShellState extends State<_PhoneShell> {
     // Growing past phone width swaps in the desktop shell: take the phone
     // pages down with this one. State stays in the controller.
     final nav = _navigator;
-    final pages = [_settings, _composer, _reader];
-    _settings = _composer = _reader = null;
+    _settings.dispose(nav);
+    final pages = [_composer, _reader];
+    _composer = _reader = null;
     if (nav != null && nav.mounted) {
       for (final r in pages) {
         if (r != null && r.isActive) nav.removeRoute(r);
@@ -637,6 +601,8 @@ class _PhoneShellState extends State<_PhoneShell> {
 
   Route<void> _route(Widget page, {bool sheet = false}) {
     switch (colectoPlatformStyle(context)) {
+      case ColectoPlatformStyle.ios when sheet:
+        return CupertinoSheetRoute<void>(scrollableBuilder: (_, _) => page);
       case ColectoPlatformStyle.ios:
         return CupertinoPageRoute<void>(
           fullscreenDialog: sheet,
@@ -740,36 +706,24 @@ class _PhoneShellState extends State<_PhoneShell> {
     }
 
     // Settings
-    if (c.activeSettings != null && _settings == null) {
-      final r = _route(_PhoneSettingsPage(controller: c), sheet: true);
-      _settings = r;
-      nav.push(r).whenComplete(() {
-        if (_settings == r) {
-          _settings = null;
-          c.closeSettings();
-        }
-      });
-    } else if (c.activeSettings == null && _settings != null) {
-      final r = _settings;
-      _settings = null;
-      _drop(r);
-    }
+    _settings.sync(
+      nav,
+      open: c.activeSettings != null,
+      design: c.design,
+      build: () => colectoModalRoute(
+        context,
+        fullscreen: true,
+        builder: (_) => ListenableBuilder(
+          listenable: c,
+          builder: (_, _) => SettingsView(controller: c, phone: true),
+        ),
+      ),
+      onDismissed: c.closeSettings,
+    );
   }
 
-  // The four folders people visit most; everything else is under More.
-  List<Folder> get _tabs {
-    Folder? byRole(FolderRole r) =>
-        c.folders.where((f) => f.role == r).firstOrNull;
-    return [
-      for (final r in const [
-        FolderRole.inbox,
-        FolderRole.drafts,
-        FolderRole.sent,
-        FolderRole.archive,
-      ])
-        ?byRole(r),
-    ];
-  }
+  // Inbox, Drafts and Sent, as in Colecto; everything else is under More.
+  List<Folder> get _tabs => primaryFolders(c.folders);
 
   void _more() {
     final rect = Rect.fromCenter(
@@ -869,33 +823,20 @@ class _PhoneShellState extends State<_PhoneShell> {
               padding: const EdgeInsets.only(left: 14, right: 8),
               child: Row(
                 children: [
-                  const ColectoMark(size: 26),
+                  const ColectoBrand(),
                   const Spacer(),
                   ColectoIconButton(
                     icon: LucideIcons.search,
-                    tooltip: 'Commands',
+                    tooltip: 'Search and commands',
                     size: 18,
                     onPressed: widget.onOpenCommandPalette,
                   ),
                   account,
-                  const SizedBox(width: 4),
-                  ColectoPressable(
-                    onTap: () => widget.onCompose(const ComposeRequest()),
-                    tooltip: 'Compose',
-                    pressScale: 0.95,
-                    builder: (context, s) => Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: s.hovered ? p.accentHi : p.accent,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        LucideIcons.squarePen,
-                        size: 18,
-                        color: p.accentInk,
-                      ),
-                    ),
+                  ColectoIconButton(
+                    icon: LucideIcons.slidersHorizontal,
+                    tooltip: 'Settings',
+                    size: 18,
+                    onPressed: () => c.openSettings(),
                   ),
                 ],
               ),
@@ -927,6 +868,13 @@ class _PhoneShellState extends State<_PhoneShell> {
       onThreadSelected: c.selectThread,
       headerSlivers: header,
       phone: true,
+      // Colecto puts Compose beside search; the native designs keep it in
+      // their chrome (the iOS toolbar, Material's FAB).
+      onCompose:
+          style == ColectoPlatformStyle.ios ||
+              style == ColectoPlatformStyle.android
+          ? null
+          : () => widget.onCompose(const ComposeRequest()),
     );
 
     final destinations = [
@@ -1141,28 +1089,6 @@ class _PhoneComposerPage extends StatelessWidget {
   }
 }
 
-class _PhoneSettingsPage extends StatelessWidget {
-  const _PhoneSettingsPage({required this.controller});
-
-  final MailController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    return Scaffold(
-      backgroundColor: p.bg,
-      body: SafeArea(
-        bottom: false,
-        child: ListenableBuilder(
-          listenable: controller,
-          builder: (context, _) =>
-              SettingsView(controller: controller, phone: true),
-        ),
-      ),
-    );
-  }
-}
-
 // ───────────────────────────── Connect ─────────────────────────────
 
 /// Colecto's connect page: the mark, one line on what this is, and the two
@@ -1291,14 +1217,3 @@ class _ConnectScreenState extends State<_ConnectScreen> {
     );
   }
 }
-
-/// The navigation pane's width in each design.
-double sidebarWidth(ColectoPlatformStyle style, {required bool compact}) =>
-    switch ((style, compact)) {
-      (ColectoPlatformStyle.android, true) => 80,
-      (_, true) => 56,
-      (ColectoPlatformStyle.android, false) => 256,
-      (ColectoPlatformStyle.ios, false) => 260,
-      (ColectoPlatformStyle.fluent, false) => 240,
-      _ => 220,
-    };

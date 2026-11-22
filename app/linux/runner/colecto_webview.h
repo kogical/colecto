@@ -9,10 +9,9 @@ G_BEGIN_DECLS
 typedef struct _ColectoWebViewHost ColectoWebViewHost;
 
 // Attaches the `com.kogical.colecto/webview` MethodChannel to [view] and
-// mounts a lazy WebKitGTK 4.1 WebView inside [overlay_fixed] only while an
+// mounts a lazy WebKitGTK 4.1 WebView directly inside [overlay] only while an
 // HTML email is open.
-ColectoWebViewHost* colecto_webview_host_new(FlView* view,
-                                             GtkFixed* overlay_fixed);
+ColectoWebViewHost* colecto_webview_host_new(FlView* view, GtkOverlay* overlay);
 
 void colecto_webview_host_dispose(ColectoWebViewHost* host);
 

@@ -29,7 +29,9 @@ package() {
   cp -a "$bundle"/{colecto,data,lib} "$pkgdir/usr/lib/colecto/"
   ln -s /usr/lib/colecto/colecto "$pkgdir/usr/bin/colecto"
   install -Dm755 "$bundle/colecto-daemon" "$bundle/colecto-mcp" -t "$pkgdir/usr/bin/"
-  install -Dm644 "$bundle/Colecto.desktop" -t "$pkgdir/usr/share/applications/"
+  install -Dm644 "$bundle/com.kogical.colecto.desktop" -t "$pkgdir/usr/share/applications/"
+  install -Dm644 "$bundle/colecto.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/colecto.svg"
+  install -Dm644 "$bundle/colecto.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/colecto.png"
   install -Dm644 "LICENSE-MIT-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
   install -Dm644 "LICENSE-APACHE-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 }

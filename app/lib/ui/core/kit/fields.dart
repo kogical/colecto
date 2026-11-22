@@ -81,10 +81,12 @@ class _ColectoTextFieldState extends State<ColectoTextField> {
     final p = ColectoPalette.of(context);
     final style = colectoPlatformStyle(context);
     final lines = widget.obscureText ? 1 : widget.maxLines;
-    // Library fields don't all read the Colecto ink, so set it explicitly.
+    // Library fields don't all read the Colecto ink or active font, so set them explicitly.
+    final font = ColectoFont.of(context);
     final mono = TextStyle(
       color: p.ink,
-      fontFamily: widget.monospace ? 'monospace' : null,
+      fontFamily: widget.monospace ? 'monospace' : font.family,
+      fontFamilyFallback: widget.monospace ? null : font.fallback,
     );
     final prefix = widget.prefixIcon == null
         ? null

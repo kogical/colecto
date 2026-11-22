@@ -156,6 +156,7 @@ impl Accounts {
             .cloned())
     }
     pub fn cached(&self, id: &str, folder: &str) -> Result<crate::MailSnapshot, Error> {
+        let folder = crate::canonical_folder(folder);
         crate::validate_query(folder, "")?;
         let snapshot = self
             .snapshots

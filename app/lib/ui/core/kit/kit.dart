@@ -14,7 +14,6 @@ library;
 
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter;
 
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:fluent_ui/fluent_ui.dart' as fl;

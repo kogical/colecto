@@ -13,6 +13,10 @@ IconData folderIcon(FolderRole role) => switch (role) {
   FolderRole.other => LucideIcons.folder,
 };
 
+/// Human-friendly folder label: normalizes IMAP's uppercase `INBOX` to `Inbox`.
+String folderDisplayName(Folder folder) =>
+    folder.name.toUpperCase() == 'INBOX' ? 'Inbox' : folder.name;
+
 /// Counts cap at "999+" so badges never blow out.
 String countLabel(int n) => n > 999 ? '999+' : '$n';
 

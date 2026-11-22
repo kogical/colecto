@@ -155,6 +155,22 @@ void main() {
       expect(controller.summaryFor(first.latest.id), isNull);
     });
 
+    test('selectThread falls back to thread messages and loads content when conversation() is empty', () async {
+      final c = MailController(backend: _EmptyConversationBackend());
+      addTearDown(c.dispose);
+      await c.initialize();
+
+      final thread = c.threads.first;
+      await c.selectThread(thread);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(c.conversation.map((tm) => tm.message.id), [
+        for (final m in thread.messages) m.id,
+      ]);
+      expect(c.contentFor(thread.latest.id), isNotNull);
+      expect(c.isLoadingContent(thread.latest.id), isFalse);
+    });
+
     test('pagination loads configured warm batch size, deduplicates, and recovers from errors', () async {
       final backend = _PagedBackend(total: 65);
       final c = MailController(backend: backend);
@@ -255,4 +271,12 @@ class _PagedBackend extends InMemoryMailBackend {
         : (start + limit).clamp(start, _items.length);
     return _items.sublist(start, end);
   }
+}
+
+/// Simulates Rust's `conversation_for()`, which returns an empty list for
+/// standalone (single-message) emails.
+class _EmptyConversationBackend extends InMemoryMailBackend {
+  @override
+  Future<List<ThreadMessage>> conversation(String account, String id) async =>
+      const [];
 }

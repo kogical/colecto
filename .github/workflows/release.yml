@@ -269,7 +269,9 @@ jobs:
               bundle_dir=$(find app/build/linux -type d -name bundle | head -n1)
               cp -a "$bundle_dir"/. "stage/$name/"
               cp "$TARGET_DIR/colecto-daemon" "$TARGET_DIR/colecto-mcp" "stage/$name/"
-              cp packaging/linux/Colecto.desktop "stage/$name/"
+              cp packaging/linux/com.kogical.colecto.desktop "stage/$name/"
+              cp app/assets/branding/logo-square.svg "stage/$name/colecto.svg"
+              cp app/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png "stage/$name/colecto.png"
               tar -czf "dist/$name.tar.gz" -C stage "$name"
 
               # Build .deb and .rpm packages with nfpm.
@@ -299,8 +301,8 @@ jobs:
                 "$appdir/usr/share/icons/hicolor/scalable/apps"
               cp -a "stage/$name/colecto" "stage/$name/data" "stage/$name/lib" "$appdir/usr/lib/colecto/"
               cp "$TARGET_DIR/colecto-daemon" "$TARGET_DIR/colecto-mcp" "$appdir/usr/bin/"
-              cp packaging/linux/Colecto.desktop "$appdir/Colecto.desktop"
-              cp packaging/linux/Colecto.desktop "$appdir/usr/share/applications/Colecto.desktop"
+              cp packaging/linux/com.kogical.colecto.desktop "$appdir/com.kogical.colecto.desktop"
+              cp packaging/linux/com.kogical.colecto.desktop "$appdir/usr/share/applications/com.kogical.colecto.desktop"
               cp app/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png "$appdir/colecto.png"
               cp app/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png "$appdir/usr/share/icons/hicolor/256x256/apps/colecto.png"
               cp app/assets/branding/logo-square.svg "$appdir/usr/share/icons/hicolor/scalable/apps/colecto.svg"
@@ -420,7 +422,17 @@ jobs:
           VERSION: ${{ needs.version.outputs.number }}
         run: |
           flutter pub get
-          flutter build apk --release --dart-define=COLECTO_BACKEND=ffi --target-platform ${{ matrix.flutter_platform }} --build-name="$VERSION"
+          # Retry on transient Gradle Plugin Portal / Maven resolution flakes.
+          for attempt in 1 2 3; do
+            if flutter build apk --release --dart-define=COLECTO_BACKEND=ffi --target-platform ${{ matrix.flutter_platform }} --build-name="$VERSION"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "::warning::Android APK build failed (attempt $attempt/3); retrying in 15s..."
+            sleep 15
+          done
 
       - name: Save Gradle downloads
         if: github.ref == 'refs/heads/main' && matrix.arch == 'arm64' && steps.gradle.outputs.cache-hit != 'true'

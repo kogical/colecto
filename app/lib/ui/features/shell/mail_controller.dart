@@ -889,10 +889,67 @@ class MailController extends ChangeNotifier {
     }
   }
 
+  /// Conversations open in the reader as tabs, per account, as in
+  /// Colecto's reader. Opening one adds a tab; at most [maxOpenTabs].
+  final Map<String, List<ConversationThread>> _tabs = {};
+  static const maxOpenTabs = 30;
+
+  List<ConversationThread> get openTabs => _tabs[_activeAccount] ?? const [];
+
+  /// The tab showing the selected message, if any.
+  String? get activeTabId => openTabs
+      .where((t) => t.messages.any((m) => m.id == _selectedMessageId))
+      .firstOrNull
+      ?.id;
+
+  void _remember(ConversationThread thread) {
+    final list = [...openTabs];
+    final at = list.indexWhere((t) => t.id == thread.id);
+    if (at >= 0) {
+      list[at] = thread;
+    } else {
+      if (list.length >= maxOpenTabs) list.removeAt(0);
+      list.add(thread);
+    }
+    _tabs[_activeAccount] = list;
+  }
+
+  /// Closes a message tab; closing the one shown opens its neighbour.
+  void closeTab(String threadId) {
+    final list = [...openTabs];
+    final at = list.indexWhere((t) => t.id == threadId);
+    if (at < 0) return;
+    final shown = activeTabId == threadId;
+    list.removeAt(at);
+    _tabs[_activeAccount] = list;
+    if (!shown) return notifyListeners();
+    if (list.isEmpty) return clearSelection();
+    unawaited(selectThread(list[at.clamp(0, list.length - 1)]));
+  }
+
+  void closeOtherTabs(ConversationThread keep) {
+    _tabs[_activeAccount] = [keep];
+    unawaited(selectThread(keep));
+  }
+
+  void closeAllTabs() {
+    _tabs.remove(_activeAccount);
+    clearSelection();
+  }
+
+  void _forgetTabs(Iterable<String> messageIds) {
+    final ids = messageIds.toSet();
+    final list = openTabs
+        .where((t) => !t.messages.any((m) => ids.contains(m.id)))
+        .toList();
+    _tabs[_activeAccount] = list;
+  }
+
   Future<void> selectThread(ConversationThread thread) async {
     final epoch = ++_threadEpoch;
     final account = _activeAccount;
     final latest = thread.latest;
+    _remember(thread);
     _selectedMessageId = latest.id;
     _compose = null;
     notifyListeners();
@@ -1008,6 +1065,7 @@ class MailController extends ChangeNotifier {
         folder: folder,
       );
       if (action == 'archive' || action == 'delete' || action == 'move') {
+        _forgetTabs(ids);
         if (ids.contains(_selectedMessageId)) {
           _selectedMessageId = null;
           _conversation = const [];

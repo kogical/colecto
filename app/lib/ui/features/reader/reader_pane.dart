@@ -565,9 +565,58 @@ class _ReaderPaneState extends State<ReaderPane> {
     );
   }
 
+  /// Right-click (or long-press) on one message of the conversation.
+  void _messageMenu(Offset pos, MailMessage m) {
+    final content = c.contentFor(m.id);
+    final self = c.currentAccountInfo?.address ?? '';
+    showColectoContextMenu(
+      context: context,
+      globalPosition: pos,
+      title: m.displaySender,
+      items: [
+        ColectoMenuItem(
+          label: 'Reply',
+          icon: LucideIcons.reply,
+          onSelected: () => widget.onCompose(
+            replyRequest(m, content, all: false, self: self),
+          ),
+        ),
+        ColectoMenuItem(
+          label: 'Reply all',
+          icon: LucideIcons.replyAll,
+          onSelected: () =>
+              widget.onCompose(replyRequest(m, content, all: true, self: self)),
+        ),
+        ColectoMenuItem(
+          label: 'Forward',
+          icon: LucideIcons.forward,
+          onSelected: () => widget.onCompose(forwardRequest(m, content)),
+        ),
+        const ColectoMenuItem.divider(),
+        ColectoMenuItem(
+          label: 'Mark as unread',
+          icon: LucideIcons.mail,
+          onSelected: () =>
+              c.organizeMessages('flags', ids: [m.id], seen: false),
+        ),
+        ColectoMenuItem(
+          label: 'Copy address',
+          icon: LucideIcons.copy,
+          onSelected: () => Clipboard.setData(ClipboardData(text: m.address)),
+        ),
+        ColectoMenuItem(
+          label: 'Write to ${m.displaySender}',
+          icon: LucideIcons.squarePen,
+          onSelected: () => widget.onCompose(ComposeRequest(to: m.address)),
+        ),
+      ],
+    );
+  }
+
   Widget _collapsed(ColectoPalette p, MailMessage m) {
     return ColectoPressable(
       onTap: () => setState(() => _expanded.add(m.id)),
+      onSecondaryTapDown: (pos) => _messageMenu(pos, m),
       pressScale: 0.99,
       semanticLabel: 'Show message from ${m.displaySender}',
       builder: (context, s) => AnimatedContainer(
@@ -639,24 +688,8 @@ class _ReaderPaneState extends State<ReaderPane> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           GestureDetector(
-            onSecondaryTapDown: (d) => showColectoContextMenu(
-              context: context,
-              globalPosition: d.globalPosition,
-              items: [
-                ColectoMenuItem(
-                  label: 'Copy address',
-                  icon: LucideIcons.copy,
-                  onSelected: () =>
-                      Clipboard.setData(ClipboardData(text: m.address)),
-                ),
-                ColectoMenuItem(
-                  label: 'Write to ${m.displaySender}',
-                  icon: LucideIcons.squarePen,
-                  onSelected: () =>
-                      widget.onCompose(ComposeRequest(to: m.address)),
-                ),
-              ],
-            ),
+            onSecondaryTapDown: (d) => _messageMenu(d.globalPosition, m),
+            onLongPressStart: (d) => _messageMenu(d.globalPosition, m),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -783,6 +816,24 @@ class _ReaderPaneState extends State<ReaderPane> {
     final busy = _downloading == key;
     return ColectoPressable(
       onTap: _downloading != null ? null : () => _download(m, a),
+      onSecondaryTapDown: (pos) => showColectoContextMenu(
+        context: context,
+        globalPosition: pos,
+        title: a.name,
+        items: [
+          ColectoMenuItem(
+            label: 'Download',
+            icon: LucideIcons.download,
+            enabled: _downloading == null,
+            onSelected: () => _download(m, a),
+          ),
+          ColectoMenuItem(
+            label: 'Copy file name',
+            icon: LucideIcons.copy,
+            onSelected: () => Clipboard.setData(ClipboardData(text: a.name)),
+          ),
+        ],
+      ),
       tooltip: 'Download ${a.name}',
       builder: (context, s) => AnimatedContainer(
         duration: ColectoMotion.hover,

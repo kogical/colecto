@@ -65,6 +65,7 @@ class _ColectoPressableState extends State<ColectoPressable> {
   bool _hovered = false;
   bool _pressed = false;
   bool _focused = false;
+  PointerDeviceKind? _pointer;
 
   bool get _enabled => widget.onTap != null || widget.onDoubleTap != null;
 
@@ -81,6 +82,8 @@ class _ColectoPressableState extends State<ColectoPressable> {
       focused: _focused,
       enabled: _enabled,
     );
+    final touchDesign = colectoTouch(context);
+    final longPress = widget.onLongPress ?? widget.onSecondaryTapDown;
     Widget child = widget.builder(context, state);
     if (widget.pressScale != 1) {
       child = AnimatedScale(
@@ -119,24 +122,35 @@ class _ColectoPressableState extends State<ColectoPressable> {
           },
         ),
       },
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        onDoubleTap: widget.onDoubleTap,
-        onTapDown: _enabled ? (_) => _setPressed(true) : null,
-        onTapUp: _enabled ? (_) => _setPressed(false) : null,
-        onTapCancel: _enabled ? () => _setPressed(false) : null,
-        onSecondaryTapDown: widget.onSecondaryTapDown == null
-            ? null
-            : (d) => widget.onSecondaryTapDown!(d.globalPosition),
-        onLongPressStart: widget.onLongPress == null
-            ? null
-            : (d) {
-                _setPressed(false);
-                HapticFeedback.mediumImpact();
-                widget.onLongPress!(d.globalPosition);
-              },
-        child: child,
+      child: Listener(
+        onPointerDown: (e) => _pointer = e.kind,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          onDoubleTap: widget.onDoubleTap,
+          onTapDown: _enabled ? (_) => _setPressed(true) : null,
+          onTapUp: _enabled ? (_) => _setPressed(false) : null,
+          onTapCancel: _enabled ? () => _setPressed(false) : null,
+          onSecondaryTapDown: widget.onSecondaryTapDown == null
+              ? null
+              : (d) => widget.onSecondaryTapDown!(d.globalPosition),
+          // A context menu also opens on a long press with a finger or pen,
+          // or with anything in the touch designs.
+          onLongPressStart: longPress == null
+              ? null
+              : (d) {
+                  if (widget.onLongPress == null &&
+                      !touchDesign &&
+                      _pointer != PointerDeviceKind.touch &&
+                      _pointer != PointerDeviceKind.stylus) {
+                    return;
+                  }
+                  _setPressed(false);
+                  HapticFeedback.mediumImpact();
+                  longPress(d.globalPosition);
+                },
+          child: child,
+        ),
       ),
     );
 
@@ -145,6 +159,15 @@ class _ColectoPressableState extends State<ColectoPressable> {
       enabled: _enabled,
       selected: widget.selected,
       label: widget.semanticLabel,
+      // Screen readers reach the context menu as the long-press action.
+      onLongPress: longPress == null
+          ? null
+          : () {
+              final box = context.findRenderObject() as RenderBox?;
+              if (box != null) {
+                longPress(box.localToGlobal(box.size.center(Offset.zero)));
+              }
+            },
       child: child,
     );
 

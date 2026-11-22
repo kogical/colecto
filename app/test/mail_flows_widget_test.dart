@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -75,6 +76,49 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.preferences.onboarded, isTrue);
       expect(find.text('Welcome to Colecto'), findsWidgets);
+    });
+
+    testWidgets('open messages stay as reader tabs', (tester) async {
+      final c = await pumpColectoApp(tester);
+      await tester.tap(find.text('Welcome to Colecto').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Q4 Architecture Review').first);
+      await tester.pumpAndSettle();
+      expect(c.openTabs.length, 2);
+      expect(c.activeTabId, c.openTabs.last.id);
+
+      // Back to the first tab, then close it: its neighbour shows.
+      await tester.tap(find.byTooltip('Welcome to Colecto'));
+      await tester.pumpAndSettle();
+      expect(c.activeTabId, c.openTabs.first.id);
+      c.closeTab(c.openTabs.first.id);
+      await tester.pumpAndSettle();
+      expect(c.openTabs.length, 1);
+      expect(c.activeTabId, c.openTabs.single.id);
+
+      // Right-click a tab for Close all.
+      await tester.tap(
+        find.byTooltip('Q4 Architecture Review'),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Close all'));
+      await tester.pumpAndSettle();
+      expect(c.openTabs, isEmpty);
+      expect(c.selectedMessageId, isNull);
+    });
+
+    testWidgets('long-press opens a row’s menu on touch designs', (
+      tester,
+    ) async {
+      await pumpColectoApp(
+        tester,
+        size: const Size(390, 844),
+        design: ColectoPlatformStyle.ios,
+      );
+      await tester.longPress(find.text('Q4 Architecture Review').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Archive'), findsWidgets);
     });
 
     testWidgets('Settings adds an account through the three-step wizard', (

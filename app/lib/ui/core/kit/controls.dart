@@ -510,3 +510,115 @@ class ColectoSelect<T> extends StatelessWidget {
     }
   }
 }
+
+/// A slider over whole steps that reports its value once it settles, so a
+/// drag saves once instead of on every step.
+///
+/// `ShadSlider` on Colecto, Fluent `Slider`, `MacosSlider`, a Material 3
+/// `Slider` or `CupertinoSlider`.
+class ColectoSlider extends StatefulWidget {
+  const ColectoSlider({
+    super.key,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.onChanged,
+    this.semanticLabel,
+  });
+
+  final int value;
+  final int min;
+  final int max;
+  final int divisions;
+  final ValueChanged<int>? onChanged;
+  final String? semanticLabel;
+
+  @override
+  State<ColectoSlider> createState() => _ColectoSliderState();
+}
+
+class _ColectoSliderState extends State<ColectoSlider> {
+  double? _dragging;
+  Timer? _settle;
+
+  @override
+  void dispose() {
+    _settle?.cancel();
+    super.dispose();
+  }
+
+  void _move(double v) {
+    setState(() => _dragging = v);
+    _settle?.cancel();
+    _settle = Timer(const Duration(milliseconds: 250), _commit);
+  }
+
+  void _commit() {
+    final v = _dragging;
+    _settle?.cancel();
+    if (v == null) return;
+    _dragging = null;
+    widget.onChanged?.call(v.round());
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    final min = widget.min.toDouble();
+    final max = widget.max.toDouble();
+    final value = (_dragging ?? widget.value.toDouble()).clamp(min, max);
+    final enabled = widget.onChanged != null;
+    final onChanged = enabled ? _move : null;
+    final Widget slider = switch (colectoPlatformStyle(context)) {
+      ColectoPlatformStyle.desktop => shad.ShadSlider(
+        // Shad sliders own their value; a new saved value starts a new one.
+        key: ValueKey(widget.value),
+        initialValue: value,
+        min: min,
+        max: max,
+        divisions: widget.divisions,
+        enabled: enabled,
+        onChanged: onChanged,
+        onChangeEnd: (_) => _commit(),
+      ),
+      ColectoPlatformStyle.fluent => fl.Slider(
+        value: value,
+        min: min,
+        max: max,
+        divisions: widget.divisions,
+        onChanged: onChanged,
+        onChangeEnd: (_) => _commit(),
+      ),
+      ColectoPlatformStyle.macos => mac.MacosSlider(
+        value: value,
+        min: min,
+        max: max,
+        discrete: true,
+        splits: widget.divisions + 1,
+        color: p.accent,
+        onChanged: onChanged ?? (_) {},
+      ),
+      ColectoPlatformStyle.android => Slider(
+        value: value,
+        min: min,
+        max: max,
+        divisions: widget.divisions,
+        label: '${value.round()}',
+        onChanged: onChanged,
+        onChangeEnd: (_) => _commit(),
+      ),
+      ColectoPlatformStyle.ios => CupertinoSlider(
+        value: value,
+        min: min,
+        max: max,
+        divisions: widget.divisions,
+        activeColor: p.accent,
+        onChanged: onChanged,
+        onChangeEnd: (_) => _commit(),
+      ),
+    };
+    return Semantics(label: widget.semanticLabel, child: slider);
+  }
+}

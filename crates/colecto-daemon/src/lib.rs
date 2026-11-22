@@ -18,6 +18,7 @@ use axum::{
     },
     routing::{delete, get, post},
 };
+use base64::Engine as _;
 use colecto_core::{
     AccountInfo, AccountInput, Accounts, ApiError, Draft, DraftInput, ErrorCategory, Folder,
     LabelInput, MailSnapshot, MailStore, Message, MessageContent, SecurityInfo, SecurityInput,
@@ -323,6 +324,11 @@ fn build_router(state: AppState, assets: Assets) -> Router {
         .route("/accounts/{id}", delete(remove_account))
         .route("/accounts/{id}/disconnect", post(disconnect_account))
         .route("/security", get(security).post(security_action))
+        .route("/backup/export", post(export_backup))
+        .route(
+            "/backup/import",
+            post(import_backup).layer(DefaultBodyLimit::max(MAX_BACKUP_BODY)),
+        )
         .route("/account", get(account))
         .route("/sync", get(sync_status))
         .route("/folders", get(folders))
@@ -758,6 +764,80 @@ async fn security_action(
         .await
         .map(Json)
         .map_err(Failure::from)
+}
+
+/// A backup upload is base64 JSON, so it may be a third larger than the zip.
+const MAX_BACKUP_BODY: usize = 256 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct ExportBackupInput {
+    #[serde(default)]
+    passphrase: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct BackupFile {
+    filename: String,
+    /// The zip, base64-encoded.
+    data: String,
+}
+
+async fn export_backup(
+    State(state): State<AppState>,
+    axum::Extension(principal): axum::Extension<Principal>,
+    input: Result<Json<ExportBackupInput>, JsonRejection>,
+) -> Result<Json<BackupFile>, Failure> {
+    let Json(input) = input.map_err(|_| Failure::bad_request("Invalid backup request"))?;
+    let bytes = state
+        .service
+        .export_backup(&principal, input.passphrase)
+        .await
+        .map_err(Failure::from)?;
+    Ok(Json(BackupFile {
+        filename: backup_filename(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    }))
+}
+
+/// `colecto-backup-YYYY-MM-DD.zip`, in UTC.
+pub fn backup_filename() -> String {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("colecto-backup-{year:04}-{month:02}-{day:02}.zip")
+}
+
+#[derive(Deserialize)]
+struct ImportBackupInput {
+    data: String,
+    #[serde(default)]
+    passphrase: Option<String>,
+}
+
+async fn import_backup(
+    State(state): State<AppState>,
+    axum::Extension(principal): axum::Extension<Principal>,
+    input: Result<Json<ImportBackupInput>, JsonRejection>,
+) -> Result<StatusCode, Failure> {
+    let Json(input) = input.map_err(|_| Failure::bad_request("Invalid backup"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(input.data.as_bytes())
+        .map_err(|_| Failure::bad_request("Invalid backup"))?;
+    state
+        .service
+        .import_backup(&principal, bytes, input.passphrase)
+        .await
+        .map_err(Failure::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn account(

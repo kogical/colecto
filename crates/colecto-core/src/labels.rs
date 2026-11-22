@@ -155,8 +155,9 @@ mod tests {
         let id = store.messages()[0].id.clone();
         store.update_label("Work", None, false).unwrap();
         store.update_label("Work", Some(&id), false).unwrap();
-        // Simulate the message aging off the current cached page or being archived/deleted.
-        store.disconnect();
+        // The message is deleted for good (Trash, then deleted again).
+        store.delete(std::slice::from_ref(&id)).unwrap();
+        store.delete(std::slice::from_ref(&id)).unwrap();
         assert!(store.message(&id).is_none());
         assert!(store.update_label("Work", Some(&id), false).is_err());
         store.update_label("Work", Some(&id), true).unwrap();

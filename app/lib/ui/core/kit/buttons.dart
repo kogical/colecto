@@ -91,7 +91,9 @@ class ColectoButton extends StatelessWidget {
     final trailing = trailingIcon == null
         ? null
         : Icon(trailingIcon, size: compact ? 13 : 14);
-    final child = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
+    final text = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
+    // Long labels shorten instead of overflowing a narrow page.
+    final Widget child = expand ? text : Flexible(child: text);
     final width = expand ? double.infinity : null;
     return switch (variant) {
       ColectoButtonVariant.primary => shad.ShadButton(

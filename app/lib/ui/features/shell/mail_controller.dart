@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:async';
 
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -20,15 +21,16 @@ import '../../core/theme/colecto_palette.dart';
 import '../../core/widgets/toast_overlay.dart';
 
 enum SettingsSection {
-  accounts('accounts', 'Accounts', LucideIcons.userRound),
-  mail('mail', 'Mail', LucideIcons.mail),
+  accounts('accounts', 'Accounts', LucideIcons.atSign),
+  mail('mail', 'Mail', LucideIcons.inbox),
   appearance('appearance', 'Appearance', LucideIcons.palette),
   notifications('notifications', 'Notifications', LucideIcons.bell),
-  privacy('privacy', 'Privacy', LucideIcons.shieldCheck),
-  servers('servers', 'Servers', LucideIcons.server),
-  ai('ai', 'AI', LucideIcons.sparkles),
-  apiKeys('api-keys', 'API keys & MCP', LucideIcons.keyRound),
-  sendApprovals('send-approvals', 'Send approvals', LucideIcons.shieldAlert);
+  privacy('privacy', 'Privacy', LucideIcons.image),
+  servers('servers', 'Connection', LucideIcons.server),
+  backup('backup', 'Backup', LucideIcons.databaseBackup),
+  ai('ai', 'AI', LucideIcons.cpu),
+  apiKeys('api-keys', 'API keys', LucideIcons.keyRound),
+  sendApprovals('send-approvals', 'Send approvals', LucideIcons.shieldCheck);
 
   const SettingsSection(this.routeSegment, this.label, this.icon);
   final String routeSegment;
@@ -44,6 +46,17 @@ enum SettingsSection {
 }
 
 enum BackendKind { demo, remoteHttp, localFfi }
+
+/// How the message list is ordered, as in Colecto's mailbox.
+enum ThreadSort {
+  newest('Newest first'),
+  oldest('Oldest first'),
+  sender('Sender A–Z'),
+  subject('Subject A–Z');
+
+  const ThreadSort(this.label);
+  final String label;
+}
 
 class ComposeRequest {
   const ComposeRequest({
@@ -257,6 +270,40 @@ class MailController extends ChangeNotifier {
   }
 
   bool get loading => _loading;
+
+  bool _onboarding = false;
+  bool _onboardingDone = false;
+
+  /// First run: onboarding never finished and there is no real account yet.
+  /// It stays up once shown, so adding the account can end on its last step.
+  bool get showsOnboarding {
+    if (!_loading &&
+        _error == null &&
+        !_authRequired &&
+        !_preferences.onboarded &&
+        !_accounts.any((a) => a.id != 'demo')) {
+      _onboarding = true;
+    }
+    return _onboarding && !_onboardingDone && !_preferences.onboarded;
+  }
+
+  /// Ends onboarding, in [account] when given or with the sample mail.
+  Future<void> finishOnboarding({String? account, bool demo = false}) async {
+    _onboardingDone = true;
+    await updatePreferences(
+      PreferencesPatch(
+        onboarded: true,
+        account: demo ? 'demo' : account,
+        accountsEnabled: demo ? const {'demo': true} : null,
+      ),
+    );
+    final target = demo ? 'demo' : account;
+    if (target != null && enabledAccounts.any((a) => a.id == target)) {
+      await selectAccount(target);
+    }
+    notifyListeners();
+  }
+
   bool get refreshing => _refreshing;
   bool get loadingMore => _loadingMore;
   bool get hasMore => _hasMore;
@@ -344,7 +391,29 @@ class MailController extends ChangeNotifier {
   String? get activeLabel => _activeLabel;
   String get searchQuery => _searchQuery;
   List<MailMessage> get messages => _messages;
-  List<ConversationThread> get threads => _threads;
+  ThreadSort _sort = ThreadSort.newest;
+  ThreadSort get sort => _sort;
+  void setSort(ThreadSort sort) {
+    if (_sort == sort) return;
+    _sort = sort;
+    notifyListeners();
+  }
+
+  /// The conversations in the list, in the chosen order.
+  List<ConversationThread> get threads {
+    String key(ConversationThread t) => switch (_sort) {
+      ThreadSort.sender => t.latest.displaySender,
+      _ => t.subject,
+    }.toLowerCase();
+    return switch (_sort) {
+      ThreadSort.newest => _threads,
+      ThreadSort.oldest => _threads.reversed.toList(growable: false),
+      ThreadSort.sender || ThreadSort.subject => [
+        ..._threads,
+      ]..sort((a, b) => key(a).compareTo(key(b))),
+    };
+  }
+
   List<Draft> get drafts => _drafts;
   Set<String> get bulkSelectedIds => Set.unmodifiable(_bulkSelectedIds);
 
@@ -364,13 +433,7 @@ class MailController extends ChangeNotifier {
   /// Settings sections worth showing. Send approvals appears only while
   /// something waits (or while it is open, so approving the last request
   /// doesn't pull the page away).
-  List<SettingsSection> get visibleSettingsSections => [
-    for (final s in SettingsSection.values)
-      if (s != SettingsSection.sendApprovals ||
-          pendingApprovalCount > 0 ||
-          _activeSettings == SettingsSection.sendApprovals)
-        s,
-  ];
+  List<SettingsSection> get visibleSettingsSections => SettingsSection.values;
 
   bool get hasUpdateBanner {
     final latest = _releaseStatus?.latest;
@@ -475,6 +538,15 @@ class MailController extends ChangeNotifier {
     _conversation = const [];
     _authRequired = false;
     await initialize();
+  }
+
+  /// Forgets the daemon access token kept for this session and asks for it
+  /// again, as Colecto's Connection page did.
+  void forgetSessionToken() {
+    clearSessionToken();
+    _daemonToken = '';
+    _authRequired = true;
+    notifyListeners();
   }
 
   Future<void> authenticateDaemon(String url, String token) async {
@@ -704,6 +776,17 @@ class MailController extends ChangeNotifier {
     await loadMailbox(refresh: false);
   }
 
+  /// Back to the whole folder, newest first.
+  Future<void> clearFilters() async {
+    _sort = ThreadSort.newest;
+    if (_activeLabel != null) {
+      await selectFolder(_activeFolder);
+    } else {
+      notifyListeners();
+    }
+    if (_searchQuery.isNotEmpty) await setSearchQuery('');
+  }
+
   Future<void> setSearchQuery(String query) async {
     _searchQuery = query;
     notifyListeners();
@@ -861,10 +944,67 @@ class MailController extends ChangeNotifier {
     }
   }
 
+  /// Conversations open in the reader as tabs, per account, as in
+  /// Colecto's reader. Opening one adds a tab; at most [maxOpenTabs].
+  final Map<String, List<ConversationThread>> _tabs = {};
+  static const maxOpenTabs = 30;
+
+  List<ConversationThread> get openTabs => _tabs[_activeAccount] ?? const [];
+
+  /// The tab showing the selected message, if any.
+  String? get activeTabId => openTabs
+      .where((t) => t.messages.any((m) => m.id == _selectedMessageId))
+      .firstOrNull
+      ?.id;
+
+  void _remember(ConversationThread thread) {
+    final list = [...openTabs];
+    final at = list.indexWhere((t) => t.id == thread.id);
+    if (at >= 0) {
+      list[at] = thread;
+    } else {
+      if (list.length >= maxOpenTabs) list.removeAt(0);
+      list.add(thread);
+    }
+    _tabs[_activeAccount] = list;
+  }
+
+  /// Closes a message tab; closing the one shown opens its neighbour.
+  void closeTab(String threadId) {
+    final list = [...openTabs];
+    final at = list.indexWhere((t) => t.id == threadId);
+    if (at < 0) return;
+    final shown = activeTabId == threadId;
+    list.removeAt(at);
+    _tabs[_activeAccount] = list;
+    if (!shown) return notifyListeners();
+    if (list.isEmpty) return clearSelection();
+    unawaited(selectThread(list[at.clamp(0, list.length - 1)]));
+  }
+
+  void closeOtherTabs(ConversationThread keep) {
+    _tabs[_activeAccount] = [keep];
+    unawaited(selectThread(keep));
+  }
+
+  void closeAllTabs() {
+    _tabs.remove(_activeAccount);
+    clearSelection();
+  }
+
+  void _forgetTabs(Iterable<String> messageIds) {
+    final ids = messageIds.toSet();
+    final list = openTabs
+        .where((t) => !t.messages.any((m) => ids.contains(m.id)))
+        .toList();
+    _tabs[_activeAccount] = list;
+  }
+
   Future<void> selectThread(ConversationThread thread) async {
     final epoch = ++_threadEpoch;
     final account = _activeAccount;
     final latest = thread.latest;
+    _remember(thread);
     _selectedMessageId = latest.id;
     _compose = null;
     notifyListeners();
@@ -900,16 +1040,17 @@ class MailController extends ChangeNotifier {
   }
 
   void selectAdjacentThread(int delta) {
-    if (_threads.isEmpty) return;
+    final list = threads;
+    if (list.isEmpty) return;
     final currentIdx = _selectedMessageId == null
         ? -1
-        : _threads.indexWhere(
+        : list.indexWhere(
             (t) => t.messages.any((m) => m.id == _selectedMessageId),
           );
     final nextIdx = currentIdx < 0
-        ? (delta > 0 ? 0 : _threads.length - 1)
-        : (currentIdx + delta).clamp(0, _threads.length - 1);
-    unawaited(selectThread(_threads[nextIdx]));
+        ? (delta > 0 ? 0 : list.length - 1)
+        : (currentIdx + delta).clamp(0, list.length - 1);
+    unawaited(selectThread(list[nextIdx]));
   }
 
   Future<void> loadMessageContent(
@@ -980,6 +1121,7 @@ class MailController extends ChangeNotifier {
         folder: folder,
       );
       if (action == 'archive' || action == 'delete' || action == 'move') {
+        _forgetTabs(ids);
         if (ids.contains(_selectedMessageId)) {
           _selectedMessageId = null;
           _conversation = const [];
@@ -1068,15 +1210,40 @@ class MailController extends ChangeNotifier {
     }
   }
 
-  Future<AccountInfo?> saveAccount(AccountInput input) async {
+  /// Saves an account. A failure goes to [onError] when given (the account
+  /// wizard shows it in place), otherwise to a toast.
+  Future<AccountInfo?> saveAccount(
+    AccountInput input, {
+    ValueChanged<String>? onError,
+  }) async {
     try {
       final info = await _backend.upsertAccount(input);
       await reloadAccounts();
-      showToast('Saved account ${info.displayName}');
+      if (_activeAccount.isEmpty && _preferences.accountEnabled(info.id)) {
+        await selectAccount(info.id);
+      }
       return info;
     } on MailBackendException catch (e) {
-      showToast(e.message, isError: true);
+      if (onError != null) {
+        onError(e.message);
+      } else {
+        showToast(e.message, isError: true);
+      }
       return null;
+    }
+  }
+
+  /// Asks the provider for a fresh Inbox, which shows at once whether the
+  /// account connects.
+  Future<bool> reconnectAccount(String id) async {
+    try {
+      await _backend.refreshMessages(id);
+      await reloadAccounts();
+      return true;
+    } on MailBackendException catch (e) {
+      showToast('Could not connect', detail: e.message, isError: true);
+      await reloadAccounts();
+      return false;
     }
   }
 
@@ -1142,6 +1309,47 @@ class MailController extends ChangeNotifier {
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     }
+  }
+
+  // Backups
+  /// A backup of this service's data; a failure goes to [onError].
+  Future<({String filename, Uint8List bytes})?> exportBackup({
+    String passphrase = '',
+    required ValueChanged<String> onError,
+  }) async {
+    try {
+      return await _backend.exportBackup(passphrase: passphrase);
+    } on MailBackendException catch (e) {
+      onError(e.message);
+      return null;
+    }
+  }
+
+  /// Restores a backup, then reloads everything from it. Returns whether it
+  /// worked; a failure goes to [onError] and changes nothing.
+  Future<bool> importBackup(
+    Uint8List bytes, {
+    String passphrase = '',
+    required ValueChanged<String> onError,
+  }) async {
+    try {
+      await _backend.importBackup(bytes, passphrase: passphrase);
+    } on MailBackendException catch (e) {
+      onError(e.message);
+      return false;
+    }
+    _tabs.clear();
+    _activeAccount = '';
+    _selectedMessageId = null;
+    _conversation = const [];
+    _contentCache.clear();
+    _summaries.clear();
+    await initialize();
+    showToast(
+      'Backup restored',
+      detail: 'Accounts without saved passwords need you to sign in again.',
+    );
+    return true;
   }
 
   // AI

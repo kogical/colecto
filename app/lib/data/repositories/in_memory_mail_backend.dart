@@ -27,11 +27,8 @@ class InMemoryMailBackend implements MailBackend {
 
   final _events = StreamController<ServiceEvent>.broadcast();
 
-  Preferences _preferences = const Preferences(
-    account: 'demo',
-    accountsEnabled: {'demo': true},
-    onboarded: false,
-  );
+  // The sample account is off until onboarding's "Explore with sample mail".
+  Preferences _preferences = const Preferences(onboarded: false);
   SecurityInfo _security = const SecurityInfo(
     cleanupPending: false,
     protected: false,
@@ -125,6 +122,84 @@ class InMemoryMailBackend implements MailBackend {
           seen: true,
           flagged: false,
           thread: 't-digest',
+        ),
+        MailMessage(
+          id: 'd-lisbon',
+          sender: 'Priya Shah',
+          address: 'priya@example.test',
+          subject: 'Lisbon in March?',
+          body: 'Booked the flights! Sending the details over the weekend. Could you find somewhere near Miradouro da Graça? The view at sunset is supposed to be unreal.',
+          date: now
+              .subtract(const Duration(days: 2, hours: 5))
+              .toIso8601String(),
+          seen: true,
+          flagged: false,
+          thread: 't-lisbon',
+        ),
+        MailMessage(
+          id: 'd-review',
+          sender: 'Sam Okafor',
+          address: 'sam@example.test',
+          subject: 'Could you look at the onboarding copy?',
+          body: 'I rewrote the three onboarding screens. Is "Add your first account" clear enough, and should the sample-mail option come first? No rush, end of week is fine.',
+          date: now
+              .subtract(const Duration(days: 2, hours: 9))
+              .toIso8601String(),
+          seen: true,
+          flagged: false,
+          thread: 't-review',
+        ),
+        MailMessage(
+          id: 'd-dinner',
+          sender: 'Jonas Berg',
+          address: 'jonas@example.test',
+          subject: 'Thursday dinner?',
+          body: 'We\'re doing the curry place on Thursday at 7. Coming? Reply and I\'ll add you to the booking.',
+          date: now
+              .subtract(const Duration(days: 3, hours: 2))
+              .toIso8601String(),
+          seen: true,
+          flagged: false,
+          thread: 't-dinner',
+        ),
+        MailMessage(
+          id: 'd-invoice',
+          sender: 'Northwind Hosting',
+          address: 'billing@northwind.example',
+          subject: 'Your November invoice',
+          body: 'Your invoice for November is ready.\n\nPlan: Small server\nAmount: €12.00\nDue: in 14 days',
+          date: now
+              .subtract(const Duration(days: 6, hours: 4))
+              .toIso8601String(),
+          seen: true,
+          flagged: false,
+          thread: 't-invoice',
+        ),
+        MailMessage(
+          id: 'd-photos',
+          sender: 'Lena Fischer',
+          address: 'lena@example.test',
+          subject: 'Photos from the hike',
+          body: 'Finally sorted through them. The one of the fog over the ridge is my favourite. I\'ll put the rest in a shared album tonight.',
+          date: now
+              .subtract(const Duration(days: 8, hours: 1))
+              .toIso8601String(),
+          seen: true,
+          flagged: false,
+          thread: 't-photos',
+        ),
+        MailMessage(
+          id: 'd-bookclub',
+          sender: 'Book club',
+          address: 'club@example.test',
+          subject: 'Next pick: vote by Friday',
+          body: 'Three candidates for next month: a novel about a lighthouse keeper, a history of maps, or short stories from Lagos. Reply with your vote.',
+          date: now
+              .subtract(const Duration(days: 9, hours: 6))
+              .toIso8601String(),
+          seen: true,
+          flagged: false,
+          thread: 't-bookclub',
         ),
       ],
       'sent': [
@@ -424,9 +499,9 @@ class InMemoryMailBackend implements MailBackend {
   }) async {
     switch (action) {
       case 'protect':
-        if (password.length < 8) {
+        if (password.length < 12) {
           throw const MailBackendException(
-            'Password must be at least 8 characters.',
+            'Use a master password of at least 12 characters.',
           );
         }
         _security = const SecurityInfo(
@@ -446,7 +521,7 @@ class InMemoryMailBackend implements MailBackend {
           protected: _security.protected,
           locked: false,
         );
-      case 'remove':
+      case 'unprotect' || 'reset' || 'cleanup':
         _security = const SecurityInfo(
           cleanupPending: false,
           protected: false,
@@ -455,6 +530,21 @@ class InMemoryMailBackend implements MailBackend {
     }
     return _security;
   }
+
+  @override
+  Future<({String filename, Uint8List bytes})> exportBackup({
+    String passphrase = '',
+  }) async => throw const MailBackendException(
+    'Backups need the Colecto mail service. The in-memory demo keeps '
+    'nothing to back up.',
+  );
+
+  @override
+  Future<void> importBackup(Uint8List bytes, {String passphrase = ''}) async =>
+      throw const MailBackendException(
+        'Restore a backup in the Colecto app or a Colecto daemon; the '
+        'in-memory demo cannot hold it.',
+      );
 
   @override
   Future<List<AccountSync>> syncStatus() async {

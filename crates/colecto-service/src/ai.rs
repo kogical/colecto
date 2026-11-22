@@ -262,6 +262,16 @@ impl Ai {
         })
     }
 
+    /// Rereads the AI settings, after a backup replaced them.
+    pub(crate) fn reload(&self) -> Result<(), String> {
+        let (settings, _) = crate::store::load_settings(&self.database, SCOPE, validate)?;
+        *self
+            .settings
+            .lock()
+            .map_err(|_| "AI settings are unavailable")? = settings;
+        Ok(())
+    }
+
     pub(crate) fn settings(&self) -> AiSettings {
         self.settings.lock().map(|s| s.clone()).unwrap_or_default()
     }

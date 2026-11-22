@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../domain/models/account_models.dart';
 import '../../domain/models/ai_models.dart';
 import '../../domain/models/automation_models.dart';
@@ -36,6 +38,16 @@ abstract class MailBackend {
   Future<SecurityInfo> security();
   Future<SecurityInfo> securityAction(String action, {String password = ''});
   Future<List<AccountSync>> syncStatus();
+
+  // Backups (a zip any Colecto app or daemon can restore)
+  /// The backup's file name and bytes. A [passphrase] seals it and adds the
+  /// saved passwords.
+  Future<({String filename, Uint8List bytes})> exportBackup({
+    String passphrase = '',
+  });
+
+  /// Replaces this service's accounts, drafts, labels and settings.
+  Future<void> importBackup(Uint8List bytes, {String passphrase = ''});
 
   // Folders & labels
   Future<List<Folder>> folders(String account);

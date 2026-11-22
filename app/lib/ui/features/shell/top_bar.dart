@@ -334,6 +334,23 @@ class AccountSwitcher extends StatelessWidget {
     return Builder(
       builder: (ctx) => ColectoPressable(
         onTap: () => showAccountMenu(ctx, c),
+        onSecondaryTapDown: (pos) => showColectoContextMenu(
+          context: ctx,
+          globalPosition: pos,
+          title: c.currentAccountInfo?.displayName,
+          items: [
+            ColectoMenuItem(
+              label: 'Check for new mail',
+              icon: LucideIcons.refreshCw,
+              onSelected: () => c.loadMailbox(refresh: true),
+            ),
+            ColectoMenuItem(
+              label: 'Account settings…',
+              icon: LucideIcons.settings,
+              onSelected: () => c.openSettings(SettingsSection.accounts),
+            ),
+          ],
+        ),
         pressScale: 0.98,
         tooltip: showName ? null : current?.displayName,
         semanticLabel: 'Current account: ${current?.displayName ?? 'none'}',

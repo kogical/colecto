@@ -158,14 +158,18 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
         const ColectoPageHead(
           title: 'AI',
           description:
-              'Summaries, reply drafts and automatic labels. Requests only go '
-              'to the endpoints you set here.',
+              'Optional help from AI services you choose. While this is off, '
+              'Colecto never contacts them. When it is on, summaries and '
+              'replies send the message you are reading, and automatic labels '
+              'send newly arrived mail, to the service you set below.',
         ),
         ColectoSection(
           children: [
             ColectoSettingRow(
-              title: 'AI features',
-              description: 'Summarize and Draft a reply in the reader.',
+              title: 'Use AI features',
+              description:
+                  'Turns on summaries, drafted replies and automatic labels. '
+                  'Off by default.',
               trailing: ColectoSwitch(
                 value: s.enabled,
                 onChanged: (v) => c.saveAiSettings(s.copyWith(enabled: v)),
@@ -183,9 +187,11 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
           ],
         ),
         ColectoSection(
-          title: 'Writing model',
+          title: 'Text model',
           description:
-              'Any OpenAI-compatible endpoint, for summaries and replies.',
+              'Writes summaries and replies. Works with any service that '
+              'offers an OpenAI-compatible chat completions API, including '
+              'ones on your own computer.',
           trailing: ColectoBadge(
             text: view.keys.text ? 'Key saved' : 'No key',
             accent: view.keys.text,
@@ -249,8 +255,10 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
           ],
         ),
         ColectoSection(
-          title: 'Labelling model',
-          description: 'A small, fast model that decides which label fits.',
+          title: 'Decision model',
+          description:
+              'Decides which label fits newly arrived mail. A small, fast '
+              'model is enough.',
           trailing: ColectoBadge(
             text: view.keys.decision ? 'Key saved' : 'No key',
             accent: view.keys.decision,

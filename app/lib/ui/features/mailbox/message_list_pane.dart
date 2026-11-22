@@ -396,7 +396,8 @@ class _MessageListPaneState extends State<MessageListPane> {
 
     final density = c.preferences.listDensity;
     final groups = <(String?, List<ConversationThread>)>[];
-    if (c.preferences.dateGroups) {
+    final byDate = c.sort == ThreadSort.newest || c.sort == ThreadSort.oldest;
+    if (c.preferences.dateGroups && byDate) {
       for (final t in c.threads) {
         final g = when(t.latestDate).group;
         if (groups.isEmpty || groups.last.$1 != g) groups.add((g, []));
@@ -407,6 +408,30 @@ class _MessageListPaneState extends State<MessageListPane> {
     }
 
     return [
+      if (c.sort != ThreadSort.newest)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 8, 4),
+            child: Row(
+              children: [
+                Icon(LucideIcons.arrowDownUp, size: 14, color: p.ink3),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Sorted ${c.sort.label.toLowerCase()}',
+                    style: kStyle(12.5, color: p.ink2),
+                  ),
+                ),
+                ColectoIconButton(
+                  icon: LucideIcons.x,
+                  tooltip: 'Clear sorting',
+                  size: 14,
+                  onPressed: () => c.setSort(ThreadSort.newest),
+                ),
+              ],
+            ),
+          ),
+        ),
       for (final (label, threads) in groups)
         SliverMainAxisGroup(
           slivers: [
@@ -556,6 +581,21 @@ class _MessageListPaneState extends State<MessageListPane> {
 
   void _threadMenu(Offset pos, ConversationThread t) {
     final ids = t.messages.map((m) => m.id).toList(growable: false);
+    // As in Colecto: up to eight labels, then the folders it can move to.
+    final labels = (c.labels.keys.toList()..sort()).take(8).toList();
+    final archive = c.folders
+        .where((f) => f.role == FolderRole.archive)
+        .firstOrNull;
+    final moveTargets = c.folders
+        .where(
+          (f) =>
+              f.id != c.activeFolder &&
+              f.role != FolderRole.archive &&
+              f.role != FolderRole.trash &&
+              f.role != FolderRole.drafts,
+        )
+        .take(12)
+        .toList();
     showColectoContextMenu(
       context: context,
       globalPosition: pos,
@@ -593,12 +633,33 @@ class _MessageListPaneState extends State<MessageListPane> {
             flagged: !t.flagged,
           ),
         ),
-        ColectoMenuItem(
-          label: 'Archive',
-          icon: LucideIcons.archive,
-          shortcut: colectoTouch(context) ? null : 'E',
-          onSelected: () => c.organizeMessages('archive', ids: ids),
-        ),
+        if (labels.isNotEmpty) const ColectoMenuItem.divider(),
+        for (final name in labels)
+          ColectoMenuItem(
+            label: 'Label: $name',
+            icon: LucideIcons.tag,
+            checked: c.labels[name]?.contains(t.latest.id) ?? false,
+            onSelected: () => c.updateLabel(
+              name: name,
+              messageId: t.latest.id,
+              remove: c.labels[name]?.contains(t.latest.id) ?? false,
+            ),
+          ),
+        const ColectoMenuItem.divider(),
+        if (archive != null && archive.id != c.activeFolder)
+          ColectoMenuItem(
+            label: 'Archive',
+            icon: LucideIcons.archive,
+            shortcut: colectoTouch(context) ? null : 'E',
+            onSelected: () => c.organizeMessages('archive', ids: ids),
+          ),
+        for (final f in moveTargets)
+          ColectoMenuItem(
+            label: 'Move to ${f.name}',
+            icon: folderIcon(f.role),
+            onSelected: () =>
+                c.organizeMessages('move', ids: ids, folder: f.id),
+          ),
         const ColectoMenuItem.divider(),
         ColectoMenuItem(
           label: 'Move to Trash',
@@ -1562,29 +1623,48 @@ class _FolderTabs extends StatelessWidget {
                 ],
               ),
             ),
-          if (rest.isNotEmpty)
-            Builder(
-              builder: (ctx) => _FolderTab(
-                icon: LucideIcons.ellipsis,
-                label: 'More',
-                iconOnly: true,
-                selected: false,
-                onTap: () => showColectoMenu(
-                  context: ctx,
-                  anchor: colectoRectOf(ctx),
-                  width: 200,
-                  items: [
-                    for (final f in rest)
-                      ColectoMenuItem(
-                        label: f.name,
-                        icon: folderIcon(f.role),
-                        checked: f.id == c.activeFolder,
-                        onSelected: () => c.selectFolder(f.id),
-                      ),
-                  ],
-                ),
-              ),
+          Builder(
+            builder: (ctx) => _FolderTab(
+              icon: LucideIcons.ellipsis,
+              label: 'More',
+              iconOnly: true,
+              selected: false,
+              onTap: () {
+                // Other folders, then how the list is sorted.
+                final items = [
+                  for (final f in rest)
+                    ColectoMenuItem(
+                      label: f.name,
+                      icon: folderIcon(f.role),
+                      checked: f.id == c.activeFolder,
+                      onSelected: () => c.selectFolder(f.id),
+                    ),
+                  if (rest.isNotEmpty) const ColectoMenuItem.divider(),
+                  for (final sort in ThreadSort.values)
+                    ColectoMenuItem(
+                      label: 'Sort: ${sort.label}',
+                      checked: c.sort == sort,
+                      onSelected: () => c.setSort(sort),
+                    ),
+                ];
+                if (colectoTouch(ctx)) {
+                  showColectoContextMenu(
+                    context: ctx,
+                    globalPosition: colectoRectOf(ctx).center,
+                    title: 'Mailboxes',
+                    items: items,
+                  );
+                } else {
+                  showColectoMenu(
+                    context: ctx,
+                    anchor: colectoRectOf(ctx),
+                    width: 220,
+                    items: items,
+                  );
+                }
+              },
             ),
+          ),
         ],
       ),
     );

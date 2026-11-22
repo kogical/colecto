@@ -680,6 +680,73 @@ impl MailService {
         .await
     }
 
+    /// A zip of the owner's accounts, drafts, labels, settings, API keys and AI data. With a
+    /// passphrase it is sealed and also holds the saved passwords.
+    pub async fn export_backup(
+        &self,
+        principal: &Principal,
+        passphrase: Option<String>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        owner_only(principal)?;
+        let passphrase = passphrase
+            .filter(|p| !p.is_empty())
+            .map(zeroize::Zeroizing::new);
+        with_accounts(self.inner.clone(), move |a| {
+            a.export_backup(
+                passphrase.as_deref().map(String::as_str),
+                env!("CARGO_PKG_VERSION"),
+                api_keys::now(),
+            )
+        })
+        .await
+    }
+
+    /// Replaces this service's data with a backup from [`Self::export_backup`], made here,
+    /// in the app, or by any daemon.
+    pub async fn import_backup(
+        &self,
+        principal: &Principal,
+        bytes: Vec<u8>,
+        passphrase: Option<String>,
+    ) -> Result<(), ServiceError> {
+        owner_only(principal)?;
+        let passphrase = passphrase
+            .filter(|p| !p.is_empty())
+            .map(zeroize::Zeroizing::new);
+        with_accounts(self.inner.clone(), move |a| {
+            a.import_backup(&bytes, passphrase.as_deref().map(String::as_str))
+        })
+        .await?;
+        self.reload_after_restore()
+    }
+
+    /// Rereads what the service keeps in memory after a backup replaced the database.
+    fn reload_after_restore(&self) -> Result<(), ServiceError> {
+        let database = self.database();
+        let failed = |e: String| ServiceError::internal(format!("Backup restored, but {e}"));
+        *self
+            .inner
+            .keys
+            .lock()
+            .map_err(|_| ServiceError::forbidden())? =
+            ApiKeys::open(database.clone()).map_err(failed)?;
+        *self
+            .inner
+            .preferences
+            .lock()
+            .map_err(|_| ServiceError::forbidden())? =
+            preferences::PreferenceStore::open(database.clone()).map_err(failed)?;
+        *self
+            .inner
+            .approvals
+            .lock()
+            .map_err(|_| ServiceError::forbidden())? =
+            approvals::Approvals::open(database.clone(), api_keys::now()).map_err(failed)?;
+        self.inner.ai.reload().map_err(failed)?;
+        let _ = self.inner.events.send(ServiceEvent::Preferences);
+        Ok(())
+    }
+
     pub fn get_preferences(
         &self,
         principal: &Principal,
@@ -885,7 +952,7 @@ impl MailService {
                 })
                 .ok_or_else(ServiceError::forbidden)?;
             let store = accounts.store(&info.id).map_err(ServiceError::from)?;
-            let store = store
+            let mut store = store
                 .try_lock()
                 .map_err(|_| ServiceError::too_many_requests("Mail service busy; try again"))?;
             let mut keys = inner.keys.lock().map_err(|_| ServiceError::forbidden())?;

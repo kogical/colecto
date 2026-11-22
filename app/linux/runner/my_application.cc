@@ -72,11 +72,6 @@ static void my_application_activate(GApplication* application) {
 
   GtkOverlay* overlay = GTK_OVERLAY(gtk_overlay_new());
   gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(view));
-  GtkFixed* webview_layer = GTK_FIXED(gtk_fixed_new());
-  gtk_overlay_add_overlay(overlay, GTK_WIDGET(webview_layer));
-  gtk_overlay_set_overlay_pass_through(overlay, GTK_WIDGET(webview_layer),
-                                       TRUE);
-  gtk_widget_show(GTK_WIDGET(webview_layer));
   gtk_widget_show(GTK_WIDGET(overlay));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(overlay));
 
@@ -87,7 +82,7 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
-  self->webview_host = colecto_webview_host_new(view, webview_layer);
+  self->webview_host = colecto_webview_host_new(view, overlay);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

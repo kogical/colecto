@@ -12,6 +12,7 @@
 /// | `ios` | `cupertino_ui` | iOS |
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 

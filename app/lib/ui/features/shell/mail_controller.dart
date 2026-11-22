@@ -20,15 +20,15 @@ import '../../core/theme/colecto_palette.dart';
 import '../../core/widgets/toast_overlay.dart';
 
 enum SettingsSection {
-  accounts('accounts', 'Accounts', LucideIcons.userRound),
-  mail('mail', 'Mail', LucideIcons.mail),
+  accounts('accounts', 'Accounts', LucideIcons.atSign),
+  mail('mail', 'Mail', LucideIcons.inbox),
   appearance('appearance', 'Appearance', LucideIcons.palette),
   notifications('notifications', 'Notifications', LucideIcons.bell),
-  privacy('privacy', 'Privacy', LucideIcons.shieldCheck),
-  servers('servers', 'Servers', LucideIcons.server),
-  ai('ai', 'AI', LucideIcons.sparkles),
-  apiKeys('api-keys', 'API keys & MCP', LucideIcons.keyRound),
-  sendApprovals('send-approvals', 'Send approvals', LucideIcons.shieldAlert);
+  privacy('privacy', 'Privacy', LucideIcons.image),
+  servers('servers', 'Connection', LucideIcons.server),
+  ai('ai', 'AI', LucideIcons.cpu),
+  apiKeys('api-keys', 'API keys', LucideIcons.keyRound),
+  sendApprovals('send-approvals', 'Send approvals', LucideIcons.shieldCheck);
 
   const SettingsSection(this.routeSegment, this.label, this.icon);
   final String routeSegment;
@@ -257,6 +257,40 @@ class MailController extends ChangeNotifier {
   }
 
   bool get loading => _loading;
+
+  bool _onboarding = false;
+  bool _onboardingDone = false;
+
+  /// First run: onboarding never finished and there is no real account yet.
+  /// It stays up once shown, so adding the account can end on its last step.
+  bool get showsOnboarding {
+    if (!_loading &&
+        _error == null &&
+        !_authRequired &&
+        !_preferences.onboarded &&
+        !_accounts.any((a) => a.id != 'demo')) {
+      _onboarding = true;
+    }
+    return _onboarding && !_onboardingDone && !_preferences.onboarded;
+  }
+
+  /// Ends onboarding, in [account] when given or with the sample mail.
+  Future<void> finishOnboarding({String? account, bool demo = false}) async {
+    _onboardingDone = true;
+    await updatePreferences(
+      PreferencesPatch(
+        onboarded: true,
+        account: demo ? 'demo' : account,
+        accountsEnabled: demo ? const {'demo': true} : null,
+      ),
+    );
+    final target = demo ? 'demo' : account;
+    if (target != null && enabledAccounts.any((a) => a.id == target)) {
+      await selectAccount(target);
+    }
+    notifyListeners();
+  }
+
   bool get refreshing => _refreshing;
   bool get loadingMore => _loadingMore;
   bool get hasMore => _hasMore;
@@ -364,13 +398,7 @@ class MailController extends ChangeNotifier {
   /// Settings sections worth showing. Send approvals appears only while
   /// something waits (or while it is open, so approving the last request
   /// doesn't pull the page away).
-  List<SettingsSection> get visibleSettingsSections => [
-    for (final s in SettingsSection.values)
-      if (s != SettingsSection.sendApprovals ||
-          pendingApprovalCount > 0 ||
-          _activeSettings == SettingsSection.sendApprovals)
-        s,
-  ];
+  List<SettingsSection> get visibleSettingsSections => SettingsSection.values;
 
   bool get hasUpdateBanner {
     final latest = _releaseStatus?.latest;
@@ -1068,15 +1096,40 @@ class MailController extends ChangeNotifier {
     }
   }
 
-  Future<AccountInfo?> saveAccount(AccountInput input) async {
+  /// Saves an account. A failure goes to [onError] when given (the account
+  /// wizard shows it in place), otherwise to a toast.
+  Future<AccountInfo?> saveAccount(
+    AccountInput input, {
+    ValueChanged<String>? onError,
+  }) async {
     try {
       final info = await _backend.upsertAccount(input);
       await reloadAccounts();
-      showToast('Saved account ${info.displayName}');
+      if (_activeAccount.isEmpty && _preferences.accountEnabled(info.id)) {
+        await selectAccount(info.id);
+      }
       return info;
     } on MailBackendException catch (e) {
-      showToast(e.message, isError: true);
+      if (onError != null) {
+        onError(e.message);
+      } else {
+        showToast(e.message, isError: true);
+      }
       return null;
+    }
+  }
+
+  /// Asks the provider for a fresh Inbox, which shows at once whether the
+  /// account connects.
+  Future<bool> reconnectAccount(String id) async {
+    try {
+      await _backend.refreshMessages(id);
+      await reloadAccounts();
+      return true;
+    } on MailBackendException catch (e) {
+      showToast('Could not connect', detail: e.message, isError: true);
+      await reloadAccounts();
+      return false;
     }
   }
 

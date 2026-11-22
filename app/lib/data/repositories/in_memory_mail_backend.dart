@@ -424,9 +424,9 @@ class InMemoryMailBackend implements MailBackend {
   }) async {
     switch (action) {
       case 'protect':
-        if (password.length < 8) {
+        if (password.length < 12) {
           throw const MailBackendException(
-            'Password must be at least 8 characters.',
+            'Use a master password of at least 12 characters.',
           );
         }
         _security = const SecurityInfo(
@@ -446,7 +446,7 @@ class InMemoryMailBackend implements MailBackend {
           protected: _security.protected,
           locked: false,
         );
-      case 'remove':
+      case 'unprotect' || 'reset' || 'cleanup':
         _security = const SecurityInfo(
           cleanupPending: false,
           protected: false,

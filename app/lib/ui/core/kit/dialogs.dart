@@ -191,6 +191,9 @@ Route<void> colectoModalRoute(
   required WidgetBuilder builder,
   bool fullscreen = false,
   Size maxSize = const Size(1080, 780),
+
+  /// Grow only as tall as the content needs (forms), up to [maxSize].
+  bool fitContent = false,
 }) {
   final p = ColectoPalette.of(context);
   final style = colectoPlatformStyle(context);
@@ -222,7 +225,8 @@ Route<void> colectoModalRoute(
     return Center(
       child: Container(
         width: size.width,
-        height: size.height,
+        height: fitContent ? null : size.height,
+        constraints: BoxConstraints(maxHeight: size.height),
         decoration: decoration,
         clipBehavior: Clip.antiAlias,
         child: content(ctx),
@@ -255,9 +259,10 @@ Route<void> colectoModalRoute(
             insetPadding: const EdgeInsets.all(28),
             clipBehavior: Clip.antiAlias,
             backgroundColor: ColectoPalette.of(ctx).bg,
-            child: SizedBox(
+            child: Container(
               width: size.width,
-              height: size.height,
+              height: fitContent ? null : size.height,
+              constraints: BoxConstraints(maxHeight: size.height),
               child: content(ctx),
             ),
           );
@@ -313,9 +318,10 @@ Route<void> colectoModalRoute(
         builder: (ctx) {
           final size = sized(ctx);
           return Center(
-            child: SizedBox(
+            child: Container(
               width: size.width,
-              height: size.height,
+              height: fitContent ? null : size.height,
+              constraints: BoxConstraints(maxHeight: size.height),
               // `MacosSheet`'s surface, drawn here so a design switch
               // (which drops MacosTheme for a frame) can't break it.
               child: Container(

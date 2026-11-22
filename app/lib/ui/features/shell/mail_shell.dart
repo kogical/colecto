@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../onboarding/onboarding_view.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/widgets/colecto_mark.dart';
@@ -193,6 +194,7 @@ class _MailShellState extends State<MailShell> {
       listenable: c,
       builder: (context, _) {
         if (c.authRequired) return _ConnectScreen(controller: c);
+        if (c.showsOnboarding) return OnboardingView(controller: c);
         return Focus(
           focusNode: _shellFocus,
           autofocus: true,

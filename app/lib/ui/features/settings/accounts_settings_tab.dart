@@ -3,10 +3,13 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../domain/models/account_models.dart';
 import '../../../domain/models/preferences_models.dart';
-import '../../core/theme/colecto_palette.dart';
 import '../../core/kit/kit.dart';
+import '../../core/theme/colecto_palette.dart';
 import '../shell/mail_controller.dart';
+import 'account_wizard.dart';
 
+/// Settings → Accounts: the mail accounts with Add account (the three-step
+/// wizard in a modal), then credential protection.
 class AccountsSettingsTab extends StatefulWidget {
   const AccountsSettingsTab({super.key, required this.controller});
 
@@ -17,495 +20,459 @@ class AccountsSettingsTab extends StatefulWidget {
 }
 
 class _AccountsSettingsTabState extends State<AccountsSettingsTab> {
-  final _nameCtrl = TextEditingController();
-  final _addressCtrl = TextEditingController();
-  final _usernameCtrl = TextEditingController();
-  final _secretCtrl = TextEditingController();
-  final _imapHostCtrl = TextEditingController();
-  final _imapPortCtrl = TextEditingController(text: '993');
-  final _smtpHostCtrl = TextEditingController();
-  final _smtpPortCtrl = TextEditingController(text: '587');
-  final _sessionUrlCtrl = TextEditingController();
-  final _tlsCertCtrl = TextEditingController();
-  final _vaultPasswordCtrl = TextEditingController();
-
-  MailProtocol _protocol = MailProtocol.imap;
-  bool _imapStarttls = false;
-  bool _discovering = false;
-  bool _saving = false;
-  String? _editingId;
-  DiscoveryResult? _discovery;
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  String? _checking;
+  bool _working = false;
+  bool _changing = false;
 
   @override
   void dispose() {
-    _nameCtrl.dispose();
-    _addressCtrl.dispose();
-    _usernameCtrl.dispose();
-    _secretCtrl.dispose();
-    _imapHostCtrl.dispose();
-    _imapPortCtrl.dispose();
-    _smtpHostCtrl.dispose();
-    _smtpPortCtrl.dispose();
-    _sessionUrlCtrl.dispose();
-    _tlsCertCtrl.dispose();
-    _vaultPasswordCtrl.dispose();
+    _password.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
-  void _populateForEdit(AccountInfo info) {
-    final s = info.settings;
-    setState(() {
-      _editingId = info.id;
-      _nameCtrl.text = s?.name ?? '';
-      _addressCtrl.text = s?.address ?? '';
-      _usernameCtrl.text = s?.username ?? '';
-      _secretCtrl.clear();
-      _protocol = s?.protocol ?? MailProtocol.imap;
-      _imapHostCtrl.text = s?.imapHost ?? '';
-      _imapPortCtrl.text = '${s?.imapPort ?? 993}';
-      _smtpHostCtrl.text = s?.smtpHost ?? '';
-      _smtpPortCtrl.text = '${s?.smtpPort ?? 587}';
-      _sessionUrlCtrl.text = s?.sessionUrl ?? '';
-      _imapStarttls = s?.imapStarttls ?? false;
-      _tlsCertCtrl.text = s?.tlsCertificate ?? '';
-      _discovery = null;
-    });
+  MailController get c => widget.controller;
+
+  /// The second line names what the first does not: the address under a
+  /// name, otherwise the server.
+  String _detail(AccountInfo a) {
+    final s = a.settings;
+    if (a.id == 'demo' || s == null) {
+      return 'Sample mail, stored on this device';
+    }
+    if (s.name.trim().isNotEmpty) return s.address;
+    if (s.protocol == MailProtocol.jmap) {
+      return Uri.tryParse(s.sessionUrl)?.host ?? s.sessionUrl;
+    }
+    return s.imapHost;
   }
 
-  void _clearForm() {
-    setState(() {
-      _editingId = null;
-      _nameCtrl.clear();
-      _addressCtrl.clear();
-      _usernameCtrl.clear();
-      _secretCtrl.clear();
-      _protocol = MailProtocol.imap;
-      _imapHostCtrl.clear();
-      _imapPortCtrl.text = '993';
-      _smtpHostCtrl.clear();
-      _smtpPortCtrl.text = '587';
-      _sessionUrlCtrl.clear();
-      _imapStarttls = false;
-      _tlsCertCtrl.clear();
-      _discovery = null;
-    });
+  ({String text, bool on, bool warn}) _status(AccountInfo a) {
+    if (!c.preferences.accountEnabled(a.id)) {
+      return (text: 'Off', on: false, warn: false);
+    }
+    if (a.id == 'demo') return (text: 'Sample', on: false, warn: false);
+    if (c.security.locked) return (text: 'Locked', on: false, warn: true);
+    if (!a.configured) return (text: 'Signed out', on: false, warn: true);
+    return a.connected
+        ? (text: 'Connected', on: true, warn: false)
+        : (text: 'Not connected', on: false, warn: false);
   }
 
-  Future<void> _discover() async {
-    final addr = _addressCtrl.text.trim();
-    if (addr.isEmpty) return;
-    setState(() => _discovering = true);
-    final res = await widget.controller.discoverAccount(addr);
+  Future<void> _reconnect(AccountInfo a) async {
+    if (!a.configured) return showAccountWizard(context, c, account: a);
+    setState(() => _checking = a.id);
+    final ok = await c.reconnectAccount(a.id);
     if (!mounted) return;
-    setState(() {
-      _discovering = false;
-      _discovery = res;
-      if (res != null) {
-        if (res.username != null && _usernameCtrl.text.isEmpty) {
-          _usernameCtrl.text = res.username!;
-        }
-        if (res.jmap != null && res.jmap!.isNotEmpty) {
-          _protocol = MailProtocol.jmap;
-          _sessionUrlCtrl.text = res.jmap!;
-        } else if (res.imap != null) {
-          _protocol = MailProtocol.imap;
-          _imapHostCtrl.text = res.imap!.host;
-          _imapPortCtrl.text = '${res.imap!.port}';
-          _imapStarttls = res.imap!.security == DiscoverySecurity.starttls;
-        }
-        if (res.smtp != null) {
-          _smtpHostCtrl.text = res.smtp!.host;
-          _smtpPortCtrl.text = '${res.smtp!.port}';
-        }
-      }
-    });
+    setState(() => _checking = null);
+    if (ok) c.showToast('${a.displayName} is connected');
   }
 
-  Future<void> _saveAccount() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    final input = AccountInput(
-      id: _editingId,
-      settings: AccountSettings(
-        name: _nameCtrl.text.trim(),
-        address: _addressCtrl.text.trim(),
-        protocol: _protocol,
-        imapHost: _imapHostCtrl.text.trim(),
-        imapPort: int.tryParse(_imapPortCtrl.text.trim()) ?? 993,
-        smtpHost: _smtpHostCtrl.text.trim(),
-        smtpPort: int.tryParse(_smtpPortCtrl.text.trim()) ?? 587,
-        username: _usernameCtrl.text.trim(),
-        sessionUrl: _sessionUrlCtrl.text.trim(),
-        imapStarttls: _imapStarttls,
-        tlsCertificate: _tlsCertCtrl.text.trim(),
-      ),
-      secret: _secretCtrl.text,
-    );
-    final saved = await widget.controller.saveAccount(input);
-    if (!mounted) return;
-    setState(() => _saving = false);
-    if (saved != null) _clearForm();
-  }
-
-  Future<void> _confirmRemove(AccountInfo acc) async {
+  Future<void> _remove(AccountInfo a) async {
     final ok = await showColectoConfirm(
       context: context,
-      title: 'Remove ${acc.displayName}?',
+      title: 'Remove ${a.displayName}?',
       message:
-          'Colecto forgets this account, its password and its downloaded mail. '
-          'Nothing is deleted on your mail server.',
+          'Its saved password, cached mail and local drafts are deleted from '
+          'this device. Nothing changes on the mail server.',
       confirmLabel: 'Remove account',
       danger: true,
     );
-    if (ok) await widget.controller.removeAccount(acc.id);
+    if (ok) await c.removeAccount(a.id);
+  }
+
+  Future<void> _protect(String action) async {
+    if (action == 'protect' && _password.text != _confirm.text) {
+      c.showToast('Master passwords do not match', isError: true);
+      return;
+    }
+    if (action == 'reset') {
+      final ok = await showColectoConfirm(
+        context: context,
+        title: 'Forget all saved credentials?',
+        message: 'You must reconnect every account. Local drafts will be kept.',
+        confirmLabel: 'Reset credentials',
+        danger: true,
+      );
+      if (!ok) return;
+    }
+    setState(() => _working = true);
+    await c.runSecurityAction(action, password: _password.text);
+    if (!mounted) return;
+    _password.clear();
+    _confirm.clear();
+    setState(() {
+      _working = false;
+      _changing = false;
+    });
+    await c.reloadAccounts();
   }
 
   @override
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
-    final c = widget.controller;
     final sec = c.security;
-    final editing = _editingId != null;
-
+    final locked = sec.locked;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const ColectoPageHead(
-          title: 'Accounts',
+          title: 'Accounts & security',
           description:
-              'IMAP/SMTP and JMAP accounts. Passwords and tokens are sealed '
-              'in the encrypted vault on this device.',
+              'Each account keeps its own mail and drafts. Credentials stay '
+              'in your system’s credential store unless you protect them '
+              'with a master password.',
         ),
         ColectoSection(
-          title: 'Your accounts',
-          description: 'Turn an account off to hide it without removing it.',
+          title: 'Mail accounts',
           children: [
-            for (final acc in c.accounts)
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  border: Border(top: BorderSide(color: p.lineSoft)),
-                ),
-                child: Row(
-                  children: [
-                    ColectoAvatar(
-                      name: acc.displayName,
-                      hueKey: acc.address,
-                      size: 34,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          ColectoText(
-                            acc.displayName,
-                            role: ColectoTextRole.bodyStrong,
-                            maxLines: 1,
-                          ),
-                          Row(
-                            children: [
-                              ColectoStatusDot(on: acc.connected),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: ColectoText.caption(
-                                  '${acc.address} · '
-                                  '${acc.settings?.protocol.name.toUpperCase() ?? 'Demo'}',
-                                  maxLines: 1,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (acc.id != 'demo')
-                      Builder(
-                        builder: (ctx) => ColectoIconButton(
-                          icon: LucideIcons.ellipsis,
-                          tooltip: 'More',
-                          onPressed: () => showColectoContextMenu(
-                            context: ctx,
-                            globalPosition: colectoRectOf(ctx).bottomLeft,
-                            title: acc.displayName,
-                            items: [
-                              ColectoMenuItem(
-                                label: 'Edit',
-                                icon: LucideIcons.pencil,
-                                onSelected: () => _populateForEdit(acc),
-                              ),
-                              ColectoMenuItem(
-                                label: 'Disconnect',
-                                icon: LucideIcons.unplug,
-                                onSelected: () => c.disconnectAccount(acc.id),
-                              ),
-                              const ColectoMenuItem.divider(),
-                              ColectoMenuItem(
-                                label: 'Remove…',
-                                icon: LucideIcons.trash2,
-                                danger: true,
-                                onSelected: () => _confirmRemove(acc),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    const SizedBox(width: 8),
-                    ColectoSwitch(
-                      value: c.preferences.accountEnabled(acc.id),
-                      semanticLabel: 'Show ${acc.displayName}',
-                      onChanged: (on) => c.updatePreferences(
-                        PreferencesPatch(accountsEnabled: {acc.id: on}),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-        ColectoSection(
-          title: editing ? 'Edit account' : 'Add an account',
-          description: editing
-              ? null
-              : 'Enter your address and Colecto will look up the servers.',
-          trailing: editing
-              ? ColectoButton(
-                  label: 'Cancel',
-                  variant: ColectoButtonVariant.ghost,
-                  onPressed: _clearForm,
-                )
-              : null,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: ColectoTextField(
-                    controller: _addressCtrl,
-                    labelText: 'Email address',
-                    hintText: 'you@example.com',
-                    keyboardType: TextInputType.emailAddress,
-                    autofillHints: const [AutofillHints.email],
-                    onSubmitted: (_) => _discover(),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ColectoButton(
-                  label: _discovering ? 'Looking up…' : 'Find servers',
-                  icon: LucideIcons.search,
-                  onPressed: _discovering ? null : _discover,
-                ),
-              ],
-            ),
-            if (_discovery != null) ...[
-              const SizedBox(height: 12),
-              ColectoNotice(
-                icon: LucideIcons.circleCheck,
-                child: Text(
-                  'Found ${_discovery!.provider ?? 'your mail server'} '
-                  '(${_discovery!.sources.join(', ')}).'
-                  '${_discovery!.appPassword ? ' It needs an app password.' : ''}'
-                  '${_discovery!.limitation != null ? ' ${_discovery!.limitation}' : ''}',
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            _pair(
-              ColectoTextField(
-                controller: _nameCtrl,
-                labelText: 'Name',
-                hintText: 'Work, Personal…',
-              ),
-              ColectoTextField(
-                controller: _usernameCtrl,
-                labelText: 'Username',
-                hintText: 'Usually your email address',
-                autofillHints: const [AutofillHints.username],
-              ),
-            ),
-            const SizedBox(height: 16),
-            ColectoTextField(
-              controller: _secretCtrl,
-              labelText: _protocol == MailProtocol.jmap
-                  ? 'API token'
-                  : 'Password or app password',
-              obscureText: true,
-              autofillHints: const [AutofillHints.password],
-            ),
-            const SizedBox(height: 16),
-            const ColectoLabel('Protocol'),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ColectoSegmented<MailProtocol>(
-                value: _protocol,
-                options: const [
-                  (MailProtocol.imap, 'IMAP + SMTP'),
-                  (MailProtocol.jmap, 'JMAP'),
-                ],
-                onChanged: (v) => setState(() => _protocol = v),
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (_protocol == MailProtocol.jmap)
-              ColectoTextField(
-                controller: _sessionUrlCtrl,
-                labelText: 'Session URL',
-                hintText: 'https://api.fastmail.com/jmap/session',
-                keyboardType: TextInputType.url,
-              )
-            else ...[
-              _hostPort(
-                'IMAP server',
-                _imapHostCtrl,
-                _imapPortCtrl,
-                'imap.example.com',
-              ),
-              const SizedBox(height: 14),
-              _hostPort(
-                'SMTP server',
-                _smtpHostCtrl,
-                _smtpPortCtrl,
-                'smtp.example.com',
-              ),
-              const SizedBox(height: 14),
-              ColectoSettingRow(
-                title: 'Use STARTTLS for IMAP',
-                description: 'For servers such as Proton Mail Bridge.',
-                trailing: ColectoSwitch(
-                  value: _imapStarttls,
-                  onChanged: (v) => setState(() => _imapStarttls = v),
-                ),
-              ),
-              const SizedBox(height: 10),
-              ColectoTextField(
-                controller: _tlsCertCtrl,
-                labelText: 'Pinned certificate (optional)',
-                hintText: '-----BEGIN CERTIFICATE-----',
-                helperText: 'Only for servers with a self-signed certificate.',
-                monospace: true,
-                maxLines: 3,
-              ),
-            ],
-            const SizedBox(height: 18),
+            for (final a in c.accounts) _row(context, a),
+            const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerLeft,
               child: ColectoButton(
-                label: _saving
-                    ? 'Connecting…'
-                    : (editing ? 'Save changes' : 'Add account'),
-                variant: ColectoButtonVariant.primary,
-                onPressed: _saving ? null : _saveAccount,
+                label: 'Add account',
+                icon: LucideIcons.plus,
+                onPressed: locked || _working
+                    ? null
+                    : () => showAccountWizard(context, c),
               ),
             ),
+            if (locked) ...[
+              const SizedBox(height: 8),
+              const ColectoParagraph(
+                'Unlock credentials below to add or change accounts.',
+                small: true,
+                tone: ColectoTone.muted,
+              ),
+            ],
           ],
         ),
+        Container(
+          height: 1,
+          margin: const EdgeInsets.only(bottom: 26),
+          color: p.lineSoft,
+        ),
         ColectoSection(
-          title: 'Vault',
-          description: sec.locked
-              ? 'Locked. Enter the vault password to read saved passwords.'
-              : sec.protected
-              ? 'Protected by a password (Argon2id).'
-              : 'Protected by your system keychain. Add a password for an '
-                    'extra lock.',
-          trailing: ColectoBadge(
-            text: sec.locked
-                ? 'Locked'
-                : (sec.protected ? 'Password' : 'Keychain'),
-            accent: !sec.locked,
-            danger: sec.locked,
-          ),
+          title: 'Credential protection',
           children: [
-            SizedBox(
-              width: 360,
-              child: ColectoTextField(
-                controller: _vaultPasswordCtrl,
-                labelText: 'Vault password',
-                obscureText: true,
-              ),
+            ColectoText(
+              sec.cleanupPending
+                  ? 'Credential cleanup pending'
+                  : sec.protected
+                  ? (locked
+                        ? 'Credentials locked'
+                        : 'Password protection enabled')
+                  : 'System credential store',
+              role: ColectoTextRole.bodyStrong,
             ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                if (!sec.protected)
+            const SizedBox(height: 6),
+            const ColectoParagraph(
+              'By default, passwords and tokens stay in your system '
+              'credential store. Optionally protect them with a master '
+              'password.',
+              small: true,
+              tone: ColectoTone.secondary,
+            ),
+            const SizedBox(height: 6),
+            const ColectoParagraph(
+              'Protects credentials only. Local emails and drafts remain '
+              'unencrypted. A forgotten master password cannot be recovered.',
+              small: true,
+              tone: ColectoTone.muted,
+            ),
+            const SizedBox(height: 16),
+            if (sec.cleanupPending) ...[
+              const ColectoErrorBox(
+                message:
+                    'The new credential storage is saved, but the previous '
+                    'system entry still needs removal. Unlock your system '
+                    'keychain and retry.',
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ColectoButton(
+                  label: 'Finish credential cleanup',
+                  onPressed: _working ? null : () => _protect('cleanup'),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (!sec.protected || locked || _changing)
+              ..._passwordForm(sec)
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
                   ColectoButton(
-                    label: 'Set password',
-                    variant: ColectoButtonVariant.primary,
-                    onPressed: () => _vault('protect'),
-                  ),
-                if (sec.protected && sec.locked)
-                  ColectoButton(
-                    label: 'Unlock',
-                    variant: ColectoButtonVariant.primary,
-                    onPressed: () => _vault('unlock'),
-                  ),
-                if (sec.protected && !sec.locked) ...[
-                  ColectoButton(
-                    label: 'Lock now',
+                    label: 'Lock credentials',
                     icon: LucideIcons.lock,
-                    onPressed: () => c.runSecurityAction('lock'),
+                    onPressed: _working ? null : () => _protect('lock'),
                   ),
                   ColectoButton(
-                    label: 'Remove password',
-                    variant: ColectoButtonVariant.danger,
-                    onPressed: () => _vault('remove'),
+                    label: 'Change master password',
+                    variant: ColectoButtonVariant.ghost,
+                    onPressed: () => setState(() => _changing = true),
+                  ),
+                  ColectoButton(
+                    label: 'Use system credential store',
+                    variant: ColectoButtonVariant.text,
+                    onPressed: _working ? null : () => _protect('unprotect'),
                   ),
                 ],
-              ],
-            ),
+              ),
+            if (sec.protected) ...[
+              const SizedBox(height: 18),
+              const ColectoText(
+                'Forgot your master password?',
+                role: ColectoTextRole.label,
+              ),
+              const SizedBox(height: 4),
+              const ColectoParagraph(
+                'Reset saved credentials and reconnect your accounts. Local '
+                'drafts will be kept.',
+                small: true,
+                tone: ColectoTone.muted,
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ColectoButton(
+                  label: 'Reset saved credentials',
+                  variant: ColectoButtonVariant.text,
+                  onPressed: _working ? null : () => _protect('reset'),
+                ),
+              ),
+            ],
           ],
         ),
       ],
     );
   }
 
-  Future<void> _vault(String action) async {
-    await widget.controller.runSecurityAction(
-      action,
-      password: _vaultPasswordCtrl.text,
-    );
-    _vaultPasswordCtrl.clear();
-  }
-
-  Widget _pair(Widget a, Widget b) => LayoutBuilder(
-    builder: (context, constraints) => constraints.maxWidth < 480
-        ? Column(children: [a, const SizedBox(height: 14), b])
-        : Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  List<Widget> _passwordForm(SecurityInfo sec) {
+    final unlocking = sec.locked;
+    final ready = unlocking
+        ? _password.text.isNotEmpty
+        : _password.text.length >= 12 && _confirm.text.isNotEmpty;
+    return [
+      Align(
+        alignment: Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(child: a),
-              const SizedBox(width: 12),
-              Expanded(child: b),
+              ColectoTextField(
+                controller: _password,
+                labelText: _changing
+                    ? 'New master password'
+                    : 'Master password',
+                obscureText: true,
+                autofillHints: [
+                  unlocking
+                      ? AutofillHints.password
+                      : AutofillHints.newPassword,
+                ],
+                helperText: unlocking ? null : 'At least 12 characters.',
+                onChanged: (_) => setState(() {}),
+                onSubmitted: unlocking ? (_) => _protect('unlock') : null,
+              ),
+              if (!unlocking) ...[
+                const SizedBox(height: 12),
+                ColectoTextField(
+                  controller: _confirm,
+                  labelText: _changing
+                      ? 'Confirm new master password'
+                      : 'Confirm master password',
+                  obscureText: true,
+                  autofillHints: const [AutofillHints.newPassword],
+                  onChanged: (_) => setState(() {}),
+                ),
+              ],
             ],
           ),
-  );
+        ),
+      ),
+      const SizedBox(height: 14),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          ColectoButton(
+            label: _working
+                ? 'Working…'
+                : unlocking
+                ? 'Unlock'
+                : _changing
+                ? 'Change password'
+                : 'Enable password protection',
+            variant: ColectoButtonVariant.primary,
+            onPressed: !ready || _working
+                ? null
+                : () => _protect(unlocking ? 'unlock' : 'protect'),
+          ),
+          if (_changing)
+            ColectoButton(
+              label: 'Cancel',
+              variant: ColectoButtonVariant.ghost,
+              onPressed: () => setState(() {
+                _changing = false;
+                _password.clear();
+                _confirm.clear();
+              }),
+            ),
+        ],
+      ),
+    ];
+  }
 
-  Widget _hostPort(
-    String label,
-    TextEditingController host,
-    TextEditingController port,
-    String hint,
-  ) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Expanded(
-        child: ColectoTextField(
-          controller: host,
-          labelText: label,
-          hintText: hint,
-          keyboardType: TextInputType.url,
+  Widget _row(BuildContext context, AccountInfo a) {
+    final p = ColectoPalette.of(context);
+    final on = c.preferences.accountEnabled(a.id);
+    final state = _status(a);
+    final real = a.id != 'demo' && a.settings != null;
+    final busy = _working || c.security.locked;
+    final narrow = MediaQuery.sizeOf(context).width < 600;
+    final actions = real
+        ? [
+            ColectoMenuItem(
+              label: a.configured ? 'Reconnect' : 'Sign in again',
+              icon: LucideIcons.refreshCw,
+              onSelected: () => _reconnect(a),
+            ),
+            ColectoMenuItem(
+              label: 'Edit',
+              icon: LucideIcons.pencil,
+              onSelected: () => showAccountWizard(context, c, account: a),
+            ),
+            const ColectoMenuItem.divider(),
+            ColectoMenuItem(
+              label: 'Remove…',
+              icon: LucideIcons.trash2,
+              danger: true,
+              onSelected: () => _remove(a),
+            ),
+          ]
+        : const <ColectoMenuItem>[];
+    return AnimatedOpacity(
+      duration: ColectoMotion.hover,
+      opacity: on ? 1 : 0.6,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            ColectoAvatar(name: a.displayName, hueKey: a.displayName, size: 32),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: ColectoText(
+                          a.displayName,
+                          role: ColectoTextRole.bodyStrong,
+                          maxLines: 1,
+                        ),
+                      ),
+                      if (real) ...[
+                        const SizedBox(width: 8),
+                        ColectoBadge(
+                          text: a.settings!.protocol == MailProtocol.jmap
+                              ? 'JMAP'
+                              : 'IMAP',
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      ColectoStatusDot(on: state.on),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: state.text,
+                                style: TextStyle(
+                                  color: state.warn ? p.star : null,
+                                ),
+                              ),
+                              TextSpan(text: '  ·  ${_detail(a)}'),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: colectoType(
+                            context,
+                            ColectoTextRole.caption,
+                          ).copyWith(color: p.ink3),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (real && !narrow) ...[
+              ColectoIconButton(
+                icon: _checking == a.id
+                    ? LucideIcons.loaderCircle
+                    : LucideIcons.refreshCw,
+                tooltip: a.configured ? 'Reconnect' : 'Sign in again',
+                onPressed: busy || _checking != null
+                    ? null
+                    : () => _reconnect(a),
+              ),
+              ColectoIconButton(
+                icon: LucideIcons.pencil,
+                tooltip: 'Edit',
+                onPressed: busy
+                    ? null
+                    : () => showAccountWizard(context, c, account: a),
+              ),
+              ColectoIconButton(
+                icon: LucideIcons.trash2,
+                tooltip: 'Remove',
+                danger: true,
+                onPressed: busy ? null : () => _remove(a),
+              ),
+              const SizedBox(width: 6),
+            ] else if (real)
+              Builder(
+                builder: (ctx) => ColectoIconButton(
+                  icon: LucideIcons.ellipsis,
+                  tooltip: 'More',
+                  onPressed: busy
+                      ? null
+                      : () => showColectoContextMenu(
+                          context: ctx,
+                          globalPosition: colectoRectOf(ctx).bottomLeft,
+                          title: a.displayName,
+                          items: actions,
+                        ),
+                ),
+              ),
+            ColectoSwitch(
+              value: on,
+              semanticLabel: 'Use ${a.displayName}',
+              onChanged: _working
+                  ? null
+                  : (v) => c.updatePreferences(
+                      PreferencesPatch(accountsEnabled: {a.id: v}),
+                    ),
+            ),
+          ],
         ),
       ),
-      const SizedBox(width: 10),
-      SizedBox(
-        width: 96,
-        child: ColectoTextField(
-          controller: port,
-          labelText: 'Port',
-          keyboardType: TextInputType.number,
-        ),
-      ),
-    ],
-  );
+    );
+  }
 }

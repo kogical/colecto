@@ -224,8 +224,10 @@ pub(crate) fn pack(
     let (name, body, sealed) = match passphrase {
         Some(passphrase) => {
             check_passphrase(passphrase)?;
-            let mut salt = [0u8; 16];
-            OsRng.fill_bytes(&mut salt);
+            // A fresh random salt for every backup.
+            let salt = [OsRng.next_u64(), OsRng.next_u64()]
+                .map(u64::to_le_bytes)
+                .concat();
             let key = derive(passphrase, &salt, KDF)?;
             let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
             let ciphertext = XChaCha20Poly1305::new((&*key).into())

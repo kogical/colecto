@@ -26,6 +26,10 @@ pub use turso::Value;
 /// One result row of [`Database::query`].
 pub struct Row(Vec<Value>);
 impl Row {
+    /// The value in column `index`, whatever its type.
+    pub(crate) fn value_at(&self, index: usize) -> Result<Value, Error> {
+        self.value(index).cloned()
+    }
     fn value(&self, index: usize) -> Result<&Value, Error> {
         self.0
             .get(index)

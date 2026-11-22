@@ -104,6 +104,10 @@ void main() {
       );
       c.openSettings(SettingsSection.appearance);
       await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.text(ColectoPlatformStyle.macos.label).first,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text(ColectoPlatformStyle.macos.label).first);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);

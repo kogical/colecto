@@ -1,5 +1,6 @@
 //! Platform-independent email business logic and core services.
 mod accounts;
+mod backup;
 mod cache;
 mod content;
 mod database;
@@ -279,34 +280,31 @@ impl MailStore {
         };
         let drafts = load_drafts(&database, account)?;
         let cache = MailCacheStore::with_database(database.clone(), account)?;
-        let store = Self {
+        let (demo_mail, demo_folders) = if account == DEMO_ACCOUNT {
+            sample_mail()
+        } else {
+            Default::default()
+        };
+        let mut store = Self {
             cache,
             content: content::ContentCache::new(database.clone(), account),
-            snapshot: std::sync::Arc::new(std::sync::RwLock::new(
-                std::collections::BTreeMap::from([(
-                    "inbox".into(),
-                    MailSnapshot {
-                        folder: "inbox".into(),
-                        messages: sample_messages(),
-                        fetched_at: None,
-                    },
-                )]),
-            )),
+            snapshot: Default::default(),
             directory,
             database,
             id: account.into(),
             namespace,
             drafts,
-            messages: sample_messages(),
+            messages: Vec::new(),
             reader_cache: Vec::new(),
-            demo_folders: std::collections::BTreeMap::new(),
-            demo_mail: sample_messages(),
+            demo_folders,
+            demo_mail,
             _lock: lock,
             account: None,
             account_key: None,
             watchers: Default::default(),
         };
         store.labels()?;
+        store.sync_demo();
         Ok(store)
     }
     pub fn connect_account(&mut self, account: MailAccount) -> Result<(), Error> {
@@ -396,30 +394,85 @@ impl MailStore {
     /// Show the sample Inbox again after a lock hid it. The demo account has no credentials,
     /// so unlocking has nothing to reconnect; without this its mail stayed empty until restart.
     pub(crate) fn restore_demo(&mut self) {
-        if self.account.is_some() {
-            return;
+        self.sync_demo();
+    }
+    /// The sample account "sends" by filing the message in its Sent folder; nothing leaves
+    /// this device. A reply joins the conversation it answers.
+    fn send_demo(&mut self, input: DraftInput) -> Result<(), Error> {
+        validate_draft(&input)?;
+        if input.recipient.trim().is_empty() {
+            return Err(Error::Invalid("Add a recipient".into()));
         }
-        self.messages = self
+        let topic = |subject: &str| {
+            let mut subject = subject.trim();
+            while let Some(rest) = ["Re:", "RE:", "Fwd:", "FW:", "Fw:"]
+                .iter()
+                .find_map(|p| subject.strip_prefix(p))
+            {
+                subject = rest.trim_start();
+            }
+            subject.to_lowercase()
+        };
+        let thread = self
             .demo_mail
             .iter()
-            .filter(|message| {
-                self.demo_folders
-                    .get(&message.id)
-                    .map_or("inbox", String::as_str)
-                    == "inbox"
-            })
+            .find(|m| topic(&m.subject) == topic(&input.subject))
+            .map(|m| m.thread.clone())
+            .unwrap_or_default();
+        let id = format!("sent-{}", self.demo_mail.len() + 1);
+        self.demo_mail.push(Message {
+            seen: true,
+            flagged: false,
+            id: id.clone(),
+            sender: "You".into(),
+            address: DEMO_ADDRESS.into(),
+            subject: input.subject,
+            body: input.body,
+            date: iso_minutes_ago(0),
+            thread: if thread.is_empty() {
+                id.clone()
+            } else {
+                thread
+            },
+        });
+        self.demo_folders.insert(id, "sent".into());
+        self.sync_demo();
+        Ok(())
+    }
+    /// The sample account's messages in one of its folders.
+    fn demo_folder(&self, folder: &str) -> Vec<Message> {
+        self.demo_mail
+            .iter()
+            .filter(|m| self.demo_folders.get(&m.id).map_or("inbox", String::as_str) == folder)
             .cloned()
-            .collect();
-        if let Ok(mut snapshot) = self.snapshot.write() {
-            snapshot.insert(
-                "inbox".into(),
-                MailSnapshot {
-                    folder: "inbox".into(),
-                    messages: self.messages.clone(),
-                    fetched_at: None,
-                },
-            );
+            .collect()
+    }
+    /// Show the sample account's folders as its Inbox and snapshots, so lists and
+    /// conversations see every sample message. Does nothing once an account connects.
+    fn sync_demo(&mut self) {
+        if self.account.is_some() || self.id != DEMO_ACCOUNT {
+            return;
         }
+        self.messages = self.demo_folder("inbox");
+        if let Ok(mut snapshot) = self.snapshot.write() {
+            snapshot.clear();
+            for folder in ["inbox", "sent", "archive", "trash"] {
+                snapshot.insert(
+                    folder.into(),
+                    MailSnapshot {
+                        folder: folder.into(),
+                        messages: self.demo_folder(folder),
+                        fetched_at: None,
+                    },
+                );
+            }
+        }
+    }
+    /// Forget the connection and reread drafts after a backup replaced this account's rows.
+    pub(crate) fn reload_after_restore(&mut self) -> Result<(), Error> {
+        self.disconnect();
+        self.drafts = load_drafts(&self.database, &self.id)?;
+        Ok(())
     }
     pub fn snapshot_handle(&self) -> SnapshotHandle {
         self.snapshot.clone()
@@ -553,20 +606,6 @@ impl MailStore {
             }
         };
         change(&mut self.messages, "inbox");
-        if self.account.is_none() {
-            self.messages = self
-                .demo_mail
-                .iter()
-                .filter(|message| {
-                    self.demo_folders
-                        .get(&message.id)
-                        .map(String::as_str)
-                        .unwrap_or("inbox")
-                        == "inbox"
-                })
-                .cloned()
-                .collect();
-        }
 
         change(&mut self.reader_cache, "");
         // Moved IMAP mail gets a new id, and deleted mail should not linger on disk.
@@ -576,12 +615,13 @@ impl MailStore {
         {
             tracing::warn!(%error, "Could not remove cached messages");
         }
+        if self.account.is_none() {
+            self.sync_demo();
+            return Ok(());
+        }
         let mut snapshots = self.snapshot.write().map_err(storage)?;
         for (folder, snapshot) in snapshots.iter_mut() {
             change(&mut snapshot.messages, folder);
-            if self.account.is_none() && folder == "inbox" {
-                snapshot.messages = self.messages.clone();
-            }
             if let Some(key) = &self.account_key {
                 self.cache.store(key, folder, &snapshot.messages)?;
             }
@@ -594,6 +634,7 @@ impl MailStore {
         let Some(account) = &self.account else {
             return Ok([
                 ("inbox", "Inbox", FolderRole::Inbox),
+                ("sent", "Sent", FolderRole::Sent),
                 ("archive", "Archive", FolderRole::Archive),
                 ("trash", "Trash", FolderRole::Trash),
             ]
@@ -690,14 +731,8 @@ impl MailStore {
             let query = search::Query::parse(search.trim());
             let messages = match folder {
                 "inbox" => self.messages.clone(),
-                "sent" => Vec::new(),
-                // The sample account keeps moved messages in Archive and Trash.
-                "archive" | "trash" => self
-                    .demo_mail
-                    .iter()
-                    .filter(|m| self.demo_folders.get(&m.id).is_some_and(|f| f == folder))
-                    .cloned()
-                    .collect(),
+                // The sample account keeps sent and moved messages in its own folders.
+                "sent" | "archive" | "trash" => self.demo_folder(folder),
                 _ => return Err(Error::Missing),
             };
             let messages = messages
@@ -818,7 +853,10 @@ impl MailStore {
         }
         Ok(messages)
     }
-    pub fn send(&self, input: DraftInput) -> Result<(), Error> {
+    pub fn send(&mut self, input: DraftInput) -> Result<(), Error> {
+        if self.account.is_none() && self.id == DEMO_ACCOUNT {
+            return self.send_demo(input);
+        }
         let account = self
             .account
             .as_ref()
@@ -877,6 +915,7 @@ impl MailStore {
         self.reader_cache
             .iter()
             .chain(&self.messages)
+            .chain(&self.demo_mail)
             .find(|m| m.id == id)
     }
     pub fn drafts(&self) -> &[Draft] {
@@ -1125,13 +1164,279 @@ fn validate(draft: &Draft) -> Result<(), Error> {
     Ok(())
 }
 
+/// The address the sample account sends from.
+const DEMO_ADDRESS: &str = "you@colecto.example";
+
+/// A UTC timestamp `minutes` before now, as ISO 8601, so sample mail always looks recent.
+fn iso_minutes_ago(minutes: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let at = now.saturating_sub(minutes * 60);
+    let (days, rest) = (at / 86_400, at % 86_400);
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// The sample account's mail and the folder of each message not in the Inbox. Replies, stars,
+/// labels, archiving and sending all work on it, and nothing leaves this device.
+fn sample_mail() -> (Vec<Message>, std::collections::BTreeMap<String, String>) {
+    const H: u64 = 60;
+    const D: u64 = 24 * H;
+    /// (id, thread, folder, minutes ago, sender, address, subject, body, seen, flagged)
+    type Sample = (
+        &'static str,
+        &'static str,
+        &'static str,
+        u64,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        bool,
+        bool,
+    );
+    let mail: &[Sample] = &[
+        (
+            "welcome",
+            "welcome",
+            "inbox",
+            25,
+            "The Colecto team",
+            "hello@colecto.example",
+            "Welcome to Colecto",
+            "Welcome to Colecto.\n\nThis is sample mail, so try anything: reply, star a message, give it a label, archive it, or open a few at once in tabs. Replies land in Sent; nothing leaves this device.\n\nWhen you are ready, add your own account in Settings → Accounts. You can switch this sample account off there too.\n\nThe Colecto team",
+            false,
+            false,
+        ),
+        (
+            "lisbon-1",
+            "lisbon",
+            "inbox",
+            3 * D + 4 * H,
+            "Priya Shah",
+            "priya@example.test",
+            "Lisbon in March?",
+            "Hi!\n\nFlights to Lisbon are cheap the second week of March. Want to go? I was thinking four nights, a little flat in Alfama, and far too many pastéis de nata.\n\nPriya",
+            true,
+            false,
+        ),
+        (
+            "lisbon-2",
+            "lisbon",
+            "sent",
+            3 * D + 2 * H,
+            "You",
+            DEMO_ADDRESS,
+            "Re: Lisbon in March?",
+            "Yes, absolutely. The 9th to the 13th works for me. Shall I look at flats?",
+            true,
+            false,
+        ),
+        (
+            "lisbon-3",
+            "lisbon",
+            "inbox",
+            95,
+            "Priya Shah",
+            "priya@example.test",
+            "Re: Lisbon in March?",
+            "Booked the flights! Sending the details over the weekend. Could you find somewhere near Miradouro da Graça? The view at sunset is supposed to be unreal.\n\nPriya",
+            false,
+            true,
+        ),
+        (
+            "review",
+            "review",
+            "inbox",
+            4 * H,
+            "Sam Okafor",
+            "sam@example.test",
+            "Could you look at the onboarding copy?",
+            "Hey,\n\nI rewrote the three onboarding screens. Two questions:\n\n1. Is \"Add your first account\" clear enough?\n2. Should the sample-mail option come first?\n\nNo rush, end of week is fine.\n\nSam",
+            false,
+            false,
+        ),
+        (
+            "dinner",
+            "dinner",
+            "inbox",
+            7 * H,
+            "Jonas Berg",
+            "jonas@example.test",
+            "Thursday dinner?",
+            "We're doing the curry place on Thursday at 7. Coming? Reply and I'll add you to the booking.\n\nJ",
+            true,
+            false,
+        ),
+        (
+            "weekend",
+            "weekend",
+            "inbox",
+            D + 3 * H,
+            "Maya Chen",
+            "maya@example.test",
+            "A small plan for the weekend",
+            "Hey,\n\nI found a little bookshop by the river. Coffee, a walk, and no particular agenda?\n\nLet me know what you think.\n\nMaya",
+            true,
+            true,
+        ),
+        (
+            "invoice",
+            "invoice",
+            "inbox",
+            D + 9 * H,
+            "Northwind Hosting",
+            "billing@northwind.example",
+            "Your November invoice",
+            "Hello,\n\nYour invoice for November is ready.\n\nPlan: Small server\nAmount: €12.00\nDue: in 14 days\n\nThanks for hosting with us.\nNorthwind Hosting",
+            true,
+            false,
+        ),
+        (
+            "signin",
+            "signin",
+            "inbox",
+            2 * D + 2 * H,
+            "Account security",
+            "no-reply@accounts.example",
+            "New sign-in on a Linux computer",
+            "We noticed a new sign-in to your account.\n\nDevice: Linux, Firefox\nPlace: near Amsterdam\n\nIf this was you, you can ignore this message. If not, change your password.",
+            true,
+            false,
+        ),
+        (
+            "photos",
+            "photos",
+            "inbox",
+            2 * D + 6 * H,
+            "Lena Fischer",
+            "lena@example.test",
+            "Photos from the hike",
+            "Finally sorted through them. The one of the fog over the ridge is my favourite. I'll put the rest in a shared album tonight.\n\nLena",
+            false,
+            false,
+        ),
+        (
+            "type",
+            "type",
+            "inbox",
+            4 * D,
+            "Letterform Weekly",
+            "news@letterform.example",
+            "This week in type: quiet interfaces",
+            "This week:\n\n• Why calm interfaces use fewer weights\n• Variable fonts on the web, five years in\n• A tour of a type foundry in Porto\n\nRead online, or reply to tell us what you would like next week.",
+            true,
+            false,
+        ),
+        (
+            "notes",
+            "notes",
+            "inbox",
+            5 * D,
+            "Studio North",
+            "studio@example.test",
+            "Notes from our last conversation",
+            "A few things to keep close:\n\n• Make room for the work that matters.\n• Keep the defaults simple.\n• Leave things better than you found them.\n\nSee you next week.",
+            true,
+            false,
+        ),
+        (
+            "bookclub",
+            "bookclub",
+            "inbox",
+            6 * D,
+            "Book club",
+            "club@example.test",
+            "Next pick: vote by Friday",
+            "Three candidates for next month:\n\n1. A novel about a lighthouse keeper\n2. A history of maps\n3. Short stories from Lagos\n\nReply with your vote.",
+            true,
+            false,
+        ),
+        (
+            "plaintext",
+            "plaintext",
+            "inbox",
+            9 * D,
+            "Alex Rivera",
+            "alex@example.test",
+            "Plain text, with a little character",
+            "Hello 世界 👋\n\nMail should be readable, whatever language you write in.\n\nThis is text, not a button: <button>Do not click</button>\nAnd this is just text too: <script>alert('hello')</script>\n\nAlex",
+            true,
+            false,
+        ),
+        (
+            "soup",
+            "soup",
+            "archive",
+            12 * D,
+            "Rosa Martín",
+            "rosa@example.test",
+            "That soup recipe",
+            "As promised: lentils, one carrot, one onion, cumin, a squeeze of lemon at the end. That's it. The lemon is the secret.\n\nRosa",
+            true,
+            false,
+        ),
+        (
+            "thanks",
+            "thanks",
+            "sent",
+            8 * D,
+            "You",
+            DEMO_ADDRESS,
+            "Thank you for Saturday",
+            "Thanks again for having us on Saturday. The garden looked wonderful.",
+            true,
+            false,
+        ),
+    ];
+    let mut folders = std::collections::BTreeMap::new();
+    let messages = mail
+        .iter()
+        .map(
+            |&(id, thread, folder, ago, sender, address, subject, body, seen, flagged)| {
+                if folder != "inbox" {
+                    folders.insert(id.to_owned(), folder.to_owned());
+                }
+                Message {
+                    seen,
+                    flagged,
+                    id: id.into(),
+                    sender: sender.into(),
+                    address: address.into(),
+                    subject: subject.into(),
+                    body: body.into(),
+                    date: iso_minutes_ago(ago),
+                    thread: thread.into(),
+                }
+            },
+        )
+        .collect();
+    (messages, folders)
+}
+
+/// Four sample Inbox messages, for tests.
+#[cfg(test)]
 fn sample_messages() -> Vec<Message> {
-    [
-        ("welcome", "The Colecto team", "hello@colecto.example", "A quieter place for your mail", "Welcome to Colecto.\n\nA little space to read, think, and write. This inbox contains sample mail, so you can explore without connecting an account.\n\nOpen a message, start a draft, and make yourself at home. Saved drafts stay on this computer, even after you restart the demo.\n\nThe Colecto team", "Nov 7"),
-        ("weekend", "Maya Chen", "maya@example.test", "A small plan for the weekend", "Hey,\n\nI found a little bookshop by the river. Coffee, a walk, and no particular agenda?\n\nLet me know what you think.\n\nMaya", "Nov 6"),
-        ("notes", "Studio North", "studio@example.test", "Notes from our last conversation", "A few things to keep close:\n\n• Make room for the work that matters.\n• Keep the defaults simple.\n• Leave things better than you found them.\n\nSee you next week.", "Nov 5"),
-        ("plaintext", "Alex Rivera", "alex@example.test", "Plain text, with a little character", "Hello 世界 👋\n\nMail should be readable, whatever language you write in.\n\nThis is text, not a button: <button>Do not click</button>\nAnd this is just text too: <script>alert('hello')</script>\n\nAlex", "Nov 4"),
-    ].into_iter().map(|(id,sender,address,subject,body,date)| Message { seen: id != "welcome", flagged: id == "weekend", id:id.into(), sender:sender.into(), address:address.into(), subject:subject.into(), body:body.into(), date:date.into(), thread: id.into() }).collect()
+    let (mail, folders) = sample_mail();
+    mail.into_iter()
+        .filter(|m| !folders.contains_key(&m.id))
+        .take(4)
+        .collect()
 }
 
 #[cfg(test)]

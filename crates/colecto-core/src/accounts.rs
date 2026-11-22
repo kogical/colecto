@@ -433,6 +433,101 @@ impl Accounts {
     pub fn cleanup(&mut self) -> Result<(), Error> {
         self.vault.cleanup()
     }
+    /// A backup of everything the owner keeps here (see [`crate::backup`]). A passphrase seals
+    /// it and adds the saved passwords, which needs unlocked credentials.
+    pub fn export_backup(
+        &self,
+        passphrase: Option<&str>,
+        app_version: &str,
+        now: u64,
+    ) -> Result<Vec<u8>, Error> {
+        let secrets = match passphrase {
+            Some(passphrase) => {
+                crate::backup::check_passphrase(passphrase)?;
+                Some(self.vault.secrets.clone().ok_or_else(|| {
+                    invalid("Unlock credentials first, so the backup can include them")
+                })?)
+            }
+            None => None,
+        };
+        let contents =
+            crate::backup::dump(&self.database, self.vault.accounts().to_vec(), secrets)?;
+        crate::backup::pack(&contents, passphrase, app_version, now)
+    }
+
+    /// Replaces this device's accounts, drafts, labels and settings with a backup's. Accounts
+    /// restored without their passwords stay signed out until the owner signs in again; the
+    /// service keys kept here survive a backup without passwords.
+    pub fn import_backup(&mut self, bytes: &[u8], passphrase: Option<&str>) -> Result<(), Error> {
+        let mut contents = crate::backup::unpack(bytes, passphrase)?;
+        let valid_id = |id: &str| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit());
+        let mut seen = std::collections::BTreeSet::new();
+        if contents.accounts.len() > 50
+            || contents
+                .accounts
+                .iter()
+                .any(|a| !valid_id(&a.id) || !seen.insert(a.id.clone()))
+        {
+            return Err(invalid("This backup has invalid accounts"));
+        }
+        let current = self
+            .vault
+            .secrets
+            .clone()
+            .ok_or_else(|| invalid("Unlock credentials first"))?;
+        let secrets: crate::credentials::Secrets = match contents.secrets.take() {
+            Some(secrets) => secrets
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("host:") || seen.contains(name))
+                .collect(),
+            None => current
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("host:"))
+                .collect(),
+        };
+        let mut records = std::mem::take(&mut contents.accounts);
+        for record in &mut records {
+            record.configured = record.configured && secrets.contains_key(&record.id);
+        }
+        let database = self.database.clone();
+        self.with_all_stores(|vault, guards| {
+            for (_, store) in guards.iter_mut() {
+                store.disconnect();
+            }
+            crate::backup::restore_tables(&database, &mut contents)?;
+            vault.commit(records, secrets)?;
+            for (_, store) in guards.iter_mut() {
+                store.reload_after_restore()?;
+            }
+            Ok(())
+        })?;
+        // Stores for accounts the backup does not have go; new ones open.
+        let keep: std::collections::BTreeSet<String> =
+            self.vault.accounts().iter().map(|a| a.id.clone()).collect();
+        self.stores
+            .retain(|id, _| id == DEMO_ACCOUNT || keep.contains(id));
+        for id in keep {
+            if !self.stores.contains_key(&id) {
+                self.stores.insert(
+                    id.clone(),
+                    Arc::new(Mutex::new(MailStore::open_with_database(
+                        self.directory.join("accounts").join(&id),
+                        self.database.clone(),
+                        &id,
+                    )?)),
+                );
+            }
+        }
+        self.snapshots = self
+            .stores
+            .iter()
+            .map(|(id, store)| (id.clone(), store.lock().unwrap().snapshot_handle()))
+            .collect();
+        if let Some(demo) = self.stores.get(DEMO_ACCOUNT) {
+            demo.lock().unwrap().restore_demo();
+        }
+        self.reconnect()
+    }
     pub fn reset(&mut self) -> Result<(), Error> {
         self.with_all_stores(|vault, guards| {
             let result = vault.reset();
@@ -449,6 +544,7 @@ impl Accounts {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
+    use crate::Value;
     #[test]
     // The fixture writes rows on a single-threaded block_on; nothing else contends for the lock.
     #[allow(clippy::await_holding_lock)]
@@ -636,5 +732,72 @@ mod storage_tests {
             accounts.database.get_record("core", "vault").unwrap(),
             before
         );
+    }
+
+    #[test]
+    fn backups_move_accounts_between_data_directories() {
+        struct NoKeys;
+        impl SecretStore for NoKeys {
+            fn get(&self, _: &str) -> Result<String, Error> {
+                Err(Error::Missing)
+            }
+            fn set(&self, _: &str, _: &str) -> Result<(), Error> {
+                Ok(())
+            }
+            fn delete(&self, _: &str) -> Result<(), Error> {
+                Ok(())
+            }
+        }
+        let open = |dir: &std::path::Path| {
+            let mut accounts =
+                Accounts::open(MailStore::open(dir).unwrap(), Arc::new(NoKeys)).unwrap();
+            // A per-run password, so no credential is written into the source.
+            let password = format!("{0}-{0}", dir.file_name().unwrap().to_string_lossy());
+            accounts.protect(&password).unwrap();
+            accounts
+        };
+        let from = tempfile::tempdir().unwrap();
+        let mut source = open(from.path());
+        let input = serde_json::from_value(serde_json::json!({"name":"Work","address":"me@example.test","protocol":"imap","imap_host":"imap.example.test","smtp_host":"smtp.example.test","username":"me","secret":"app-password"})).unwrap();
+        let id = source.upsert(input).unwrap().id;
+        source
+            .database
+            .write(vec![(
+                "INSERT INTO labels(account,name) VALUES (?1,'Travel')",
+                vec![Value::Text(id.clone())],
+            )])
+            .unwrap();
+        let passphrase = format!("{}-backup", id);
+        let sealed = source.export_backup(Some(&passphrase), "test", 1).unwrap();
+        let plain = source.export_backup(None, "test", 1).unwrap();
+
+        let to = tempfile::tempdir().unwrap();
+        let mut target = open(to.path());
+        assert!(target.import_backup(&sealed, None).is_err());
+        target.import_backup(&sealed, Some(&passphrase)).unwrap();
+        let restored = target.list().into_iter().find(|a| a.id == id).unwrap();
+        assert!(restored.configured);
+        assert_eq!(restored.settings.unwrap().name, "Work");
+        assert_eq!(
+            target.vault.secrets.as_ref().unwrap()[&id].0,
+            "app-password"
+        );
+        assert_eq!(
+            target
+                .store(&id)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .labels()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Without a passphrase the account comes back signed out.
+        target.import_backup(&plain, None).unwrap();
+        let restored = target.list().into_iter().find(|a| a.id == id).unwrap();
+        assert!(!restored.configured);
+        assert!(!target.vault.secrets.as_ref().unwrap().contains_key(&id));
     }
 }

@@ -1,8 +1,10 @@
 import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter/gestures.dart' show kMiddleMouseButton;
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../onboarding/onboarding_view.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/widgets/colecto_mark.dart';
@@ -193,6 +195,7 @@ class _MailShellState extends State<MailShell> {
       listenable: c,
       builder: (context, _) {
         if (c.authRequired) return _ConnectScreen(controller: c);
+        if (c.showsOnboarding) return OnboardingView(controller: c);
         return Focus(
           focusNode: _shellFocus,
           autofocus: true,
@@ -340,6 +343,11 @@ class _WorkspaceState extends State<_Workspace> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          const _PaneHeader(
+                            children: [
+                              _PaneTab(icon: LucideIcons.inbox, label: 'Mail'),
+                            ],
+                          ),
                           Expanded(
                             child: MessageListPane(
                               controller: c,
@@ -362,17 +370,16 @@ class _WorkspaceState extends State<_Workspace> {
                     onReset: () => setState(() => _listWidth = null),
                   ),
                   Expanded(
-                    child: c.compose != null
-                        ? ComposerView(
-                            key: ValueKey('compose-${c.composeKey}'),
-                            controller: c,
-                            request: c.compose!,
-                            onClose: c.closeCompose,
-                          )
-                        : ReaderPane(
-                            controller: c,
-                            onCompose: widget.onCompose,
-                          ),
+                    child: ColoredBox(
+                      color: p.bg,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _ReaderHeader(controller: c),
+                          Expanded(child: _reader()),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               );
@@ -382,6 +389,15 @@ class _WorkspaceState extends State<_Workspace> {
       ],
     );
   }
+
+  Widget _reader() => c.compose != null
+      ? ComposerView(
+          key: ValueKey('compose-${c.composeKey}'),
+          controller: c,
+          request: c.compose!,
+          onClose: c.closeCompose,
+        )
+      : ReaderPane(controller: c, onCompose: widget.onCompose);
 }
 
 /// The foot of the Mail pane: the account switcher with live sync status.
@@ -393,12 +409,202 @@ class _AccountsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+    return DecoratedBox(
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: p.lineSoft)),
       ),
-      child: AccountSwitcher(controller: controller, expand: true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _PaneHeader(
+            border: false,
+            children: [_PaneTab(icon: LucideIcons.atSign, label: 'Accounts')],
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(6, 2, 6, 6),
+            child: AccountSwitcher(controller: controller, expand: true),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A pane's head, as in Colecto's workspace: the pane's own tab, then any
+/// tabs it holds (open messages in the reader).
+class _PaneHeader extends StatelessWidget {
+  const _PaneHeader({required this.children, this.border = true});
+
+  final List<Widget> children;
+  final bool border;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: border
+          ? BoxDecoration(
+              border: Border(bottom: BorderSide(color: p.lineSoft)),
+            )
+          : null,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: ListView(scrollDirection: Axis.horizontal, children: children),
+      ),
+    );
+  }
+}
+
+/// A pane's own tab: its icon and name over an accent underline.
+class _PaneTab extends StatelessWidget {
+  const _PaneTab({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: p.accent, width: 2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: p.ink2),
+          const SizedBox(width: 6),
+          Text(label, style: kStyle(13, weight: 600, color: p.ink)),
+        ],
+      ),
+    );
+  }
+}
+
+/// The reader's head: its tab, then a tab per open message. Selecting one
+/// shows it; × (or a middle click) closes it; right-click offers Close all.
+class _ReaderHeader extends StatelessWidget {
+  const _ReaderHeader({required this.controller});
+
+  final MailController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller;
+    final active = c.compose == null ? c.activeTabId : null;
+    return _PaneHeader(
+      children: [
+        const _PaneTab(icon: LucideIcons.bookOpen, label: 'Reader'),
+        for (final t in c.openTabs)
+          _MessageTab(
+            label: t.subject.trim().isEmpty ? '(No subject)' : t.subject,
+            active: t.id == active,
+            onTap: () => c.selectThread(t),
+            onClose: () => c.closeTab(t.id),
+            onCloseOthers: () => c.closeOtherTabs(t),
+            onCloseAll: c.closeAllTabs,
+          ),
+      ],
+    );
+  }
+}
+
+class _MessageTab extends StatelessWidget {
+  const _MessageTab({
+    required this.label,
+    required this.active,
+    required this.onTap,
+    required this.onClose,
+    required this.onCloseOthers,
+    required this.onCloseAll,
+  });
+
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+  final VoidCallback onClose;
+  final VoidCallback onCloseOthers;
+  final VoidCallback onCloseAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: Center(
+        child: Listener(
+          onPointerDown: (e) {
+            if (e.buttons == kMiddleMouseButton) onClose();
+          },
+          child: ColectoPressable(
+            onTap: onTap,
+            onSecondaryTapDown: (pos) => showColectoContextMenu(
+              context: context,
+              globalPosition: pos,
+              title: label,
+              items: [
+                ColectoMenuItem(
+                  label: 'Close',
+                  icon: LucideIcons.x,
+                  onSelected: onClose,
+                ),
+                ColectoMenuItem(
+                  label: 'Close others',
+                  onSelected: onCloseOthers,
+                ),
+                ColectoMenuItem(label: 'Close all', onSelected: onCloseAll),
+              ],
+            ),
+            selected: active,
+            semanticLabel: label,
+            tooltip: label,
+            focusRadius: colectoRadius(context),
+            builder: (context, s) => AnimatedContainer(
+              duration: ColectoMotion.hover,
+              height: 28,
+              constraints: const BoxConstraints(maxWidth: 240),
+              padding: const EdgeInsets.only(left: 10, right: 4),
+              decoration: BoxDecoration(
+                color: active
+                    ? p.raise
+                    : s.hovered
+                    ? p.raise.withValues(alpha: 0.5)
+                    : const Color(0x00000000),
+                borderRadius: BorderRadius.circular(colectoRadius(context)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: kStyle(
+                        12.5,
+                        weight: active ? 560 : 450,
+                        color: active ? p.ink : p.ink2,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  ColectoIconButton(
+                    icon: LucideIcons.x,
+                    tooltip: 'Close',
+                    size: 12,
+                    dimension: 22,
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -5,7 +5,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../domain/models/mail_models.dart';
-import '../../../domain/models/preferences_models.dart';
 import '../../core/format/when.dart';
 import '../../core/platform/save_file.dart';
 import '../../core/theme/colecto_palette.dart';
@@ -566,9 +565,58 @@ class _ReaderPaneState extends State<ReaderPane> {
     );
   }
 
+  /// Right-click (or long-press) on one message of the conversation.
+  void _messageMenu(Offset pos, MailMessage m) {
+    final content = c.contentFor(m.id);
+    final self = c.currentAccountInfo?.address ?? '';
+    showColectoContextMenu(
+      context: context,
+      globalPosition: pos,
+      title: m.displaySender,
+      items: [
+        ColectoMenuItem(
+          label: 'Reply',
+          icon: LucideIcons.reply,
+          onSelected: () => widget.onCompose(
+            replyRequest(m, content, all: false, self: self),
+          ),
+        ),
+        ColectoMenuItem(
+          label: 'Reply all',
+          icon: LucideIcons.replyAll,
+          onSelected: () =>
+              widget.onCompose(replyRequest(m, content, all: true, self: self)),
+        ),
+        ColectoMenuItem(
+          label: 'Forward',
+          icon: LucideIcons.forward,
+          onSelected: () => widget.onCompose(forwardRequest(m, content)),
+        ),
+        const ColectoMenuItem.divider(),
+        ColectoMenuItem(
+          label: 'Mark as unread',
+          icon: LucideIcons.mail,
+          onSelected: () =>
+              c.organizeMessages('flags', ids: [m.id], seen: false),
+        ),
+        ColectoMenuItem(
+          label: 'Copy address',
+          icon: LucideIcons.copy,
+          onSelected: () => Clipboard.setData(ClipboardData(text: m.address)),
+        ),
+        ColectoMenuItem(
+          label: 'Write to ${m.displaySender}',
+          icon: LucideIcons.squarePen,
+          onSelected: () => widget.onCompose(ComposeRequest(to: m.address)),
+        ),
+      ],
+    );
+  }
+
   Widget _collapsed(ColectoPalette p, MailMessage m) {
     return ColectoPressable(
       onTap: () => setState(() => _expanded.add(m.id)),
+      onSecondaryTapDown: (pos) => _messageMenu(pos, m),
       pressScale: 0.99,
       semanticLabel: 'Show message from ${m.displaySender}',
       builder: (context, s) => AnimatedContainer(
@@ -640,24 +688,8 @@ class _ReaderPaneState extends State<ReaderPane> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           GestureDetector(
-            onSecondaryTapDown: (d) => showColectoContextMenu(
-              context: context,
-              globalPosition: d.globalPosition,
-              items: [
-                ColectoMenuItem(
-                  label: 'Copy address',
-                  icon: LucideIcons.copy,
-                  onSelected: () =>
-                      Clipboard.setData(ClipboardData(text: m.address)),
-                ),
-                ColectoMenuItem(
-                  label: 'Write to ${m.displaySender}',
-                  icon: LucideIcons.squarePen,
-                  onSelected: () =>
-                      widget.onCompose(ComposeRequest(to: m.address)),
-                ),
-              ],
-            ),
+            onSecondaryTapDown: (d) => _messageMenu(d.globalPosition, m),
+            onLongPressStart: (d) => _messageMenu(d.globalPosition, m),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -784,6 +816,24 @@ class _ReaderPaneState extends State<ReaderPane> {
     final busy = _downloading == key;
     return ColectoPressable(
       onTap: _downloading != null ? null : () => _download(m, a),
+      onSecondaryTapDown: (pos) => showColectoContextMenu(
+        context: context,
+        globalPosition: pos,
+        title: a.name,
+        items: [
+          ColectoMenuItem(
+            label: 'Download',
+            icon: LucideIcons.download,
+            enabled: _downloading == null,
+            onSelected: () => _download(m, a),
+          ),
+          ColectoMenuItem(
+            label: 'Copy file name',
+            icon: LucideIcons.copy,
+            onSelected: () => Clipboard.setData(ClipboardData(text: a.name)),
+          ),
+        ],
+      ),
       tooltip: 'Download ${a.name}',
       builder: (context, s) => AnimatedContainer(
         duration: ColectoMotion.hover,
@@ -845,7 +895,6 @@ class _ReaderPaneState extends State<ReaderPane> {
 }
 
 /// The empty reader: the mark, a time-of-day greeting and how to get around.
-/// Before the first account it offers to add one.
 class _Welcome extends StatelessWidget {
   const _Welcome({required this.controller});
 
@@ -855,7 +904,6 @@ class _Welcome extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
     final c = controller;
-    final onboarding = !c.preferences.onboarded;
     final mod = colectoModKey(context);
     return ColoredBox(
       color: p.bg,
@@ -868,7 +916,7 @@ class _Welcome extends StatelessWidget {
               const ColectoMark(size: 48),
               const SizedBox(height: 18),
               Text(
-                onboarding ? 'Welcome to Colecto.' : greeting(),
+                greeting(),
                 textAlign: TextAlign.center,
                 style: kStyle(
                   22,
@@ -884,42 +932,11 @@ class _Welcome extends StatelessWidget {
                 child: Text(
                   c.loading
                       ? 'Opening your mailbox…'
-                      : onboarding
-                      ? 'You’re looking at demo mail. Add your IMAP or JMAP '
-                            'account when you’re ready; passwords stay in the '
-                            'encrypted vault.'
                       : 'Pick a message and it will open here.',
                   textAlign: TextAlign.center,
                   style: kStyle(13.5, color: p.ink3, height: 1.55),
                 ),
               ),
-              if (onboarding) ...[
-                const SizedBox(height: 20),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    ColectoButton(
-                      label: 'Add account',
-                      icon: LucideIcons.plus,
-                      variant: ColectoButtonVariant.primary,
-                      onPressed: () {
-                        c.updatePreferences(
-                          const PreferencesPatch(onboarded: true),
-                        );
-                        c.openSettings(SettingsSection.accounts);
-                      },
-                    ),
-                    ColectoButton(
-                      label: 'Explore the demo',
-                      onPressed: () => c.updatePreferences(
-                        const PreferencesPatch(onboarded: true),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
               if (!colectoTouch(context)) ...[
                 const SizedBox(height: 22),
                 Wrap(

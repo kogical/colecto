@@ -27,7 +27,10 @@ class ColectoPageHead extends StatelessWidget {
                 ColectoText.title(title),
                 if (description != null) ...[
                   const SizedBox(height: 8),
-                  ColectoParagraph(description!),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 540),
+                    child: ColectoParagraph(description!),
+                  ),
                 ],
               ],
             ),
@@ -39,8 +42,8 @@ class ColectoPageHead extends StatelessWidget {
   }
 }
 
-/// Colecto's `.settings-card`: not a card at all, but a section divided from
-/// the one above by a hairline.
+/// Colecto's `.settings-group`: a group label, an optional lead and its
+/// settings, spaced from the next group rather than ruled off.
 class ColectoSection extends StatelessWidget {
   const ColectoSection({
     super.key,
@@ -57,12 +60,8 @@ class ColectoSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    return Container(
-      padding: const EdgeInsets.only(top: 22, bottom: 24),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: p.lineSoft)),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 30),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -76,22 +75,23 @@ class ColectoSection extends StatelessWidget {
                     children: [
                       ColectoText.heading(title!),
                       if (description != null) ...[
-                        const SizedBox(height: 6),
-                        ColectoParagraph(description!),
+                        const SizedBox(height: 4),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 540),
+                          child: ColectoParagraph(
+                            description!,
+                            small: true,
+                            tone: ColectoTone.secondary,
+                          ),
+                        ),
                       ],
                     ],
                   ),
                 ),
-                if (trailing != null) ...[
-                  const SizedBox(width: 24),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: trailing!,
-                  ),
-                ],
+                if (trailing != null) ...[const SizedBox(width: 24), trailing!],
               ],
             ),
-          if (title != null && children.isNotEmpty) const SizedBox(height: 16),
+          if (title != null && children.isNotEmpty) const SizedBox(height: 10),
           ...children,
         ],
       ),
@@ -249,10 +249,14 @@ class ColectoNavBar extends StatelessWidget {
     this.onBack,
     this.backLabel,
     this.onClose,
+    this.closeLabel = 'Done',
   });
 
   final String title;
   final VoidCallback? onBack;
+
+  /// What iOS calls the close action (*Done*, or *Cancel* for a form).
+  final String closeLabel;
 
   /// The page back leads to (iOS shows it beside the chevron).
   final String? backLabel;
@@ -280,7 +284,7 @@ class ColectoNavBar extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   onPressed: onClose,
                   child: Text(
-                    'Done',
+                    closeLabel,
                     style: kStyle(17, weight: 600, color: p.accent),
                   ),
                 ),
@@ -455,5 +459,197 @@ class ColectoNavList extends StatelessWidget {
           ),
         );
     }
+  }
+}
+
+/// The inside of a form modal (Add an account): a head with the title, a
+/// lead and Close, an optional strip under it, the scrolling body and the
+/// actions at the foot. On phones the head is the design's navigation bar
+/// (with *Cancel* on iOS) and the actions sit above the home indicator.
+class ColectoSheetFrame extends StatelessWidget {
+  const ColectoSheetFrame({
+    super.key,
+    required this.title,
+    this.description,
+    this.onClose,
+    this.strip,
+    required this.body,
+    this.actions = const [],
+    this.bodyController,
+  });
+
+  final String title;
+  final String? description;
+  final VoidCallback? onClose;
+
+  /// Shown between the head and the body, such as a step indicator.
+  final Widget? strip;
+  final Widget body;
+  final List<Widget> actions;
+  final ScrollController? bodyController;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    final phone = MediaQuery.sizeOf(context).width < 600;
+    final side = phone ? 16.0 : 24.0;
+    final head = phone
+        ? ColectoNavBar(title: title, onClose: onClose, closeLabel: 'Cancel')
+        : Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 14, 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: kStyle(19, weight: 640, color: p.ink)),
+                      if (description != null) ...[
+                        const SizedBox(height: 6),
+                        ColectoParagraph(
+                          description!,
+                          small: true,
+                          tone: ColectoTone.secondary,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (onClose != null)
+                  ColectoIconButton(
+                    icon: LucideIcons.x,
+                    tooltip: 'Close',
+                    size: 16,
+                    onPressed: onClose,
+                  ),
+              ],
+            ),
+          );
+    // In a dialog the frame is as tall as its content; on a phone page it
+    // fills the screen and keeps the actions at the foot.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        head,
+        if (phone && description != null)
+          Padding(
+            padding: EdgeInsets.fromLTRB(side, 14, side, 0),
+            child: ColectoParagraph(
+              description!,
+              small: true,
+              tone: ColectoTone.secondary,
+            ),
+          ),
+        if (strip != null)
+          Padding(
+            padding: EdgeInsets.fromLTRB(side, 12, side, 0),
+            child: strip,
+          ),
+        Flexible(
+          fit: phone ? FlexFit.tight : FlexFit.loose,
+          child: SingleChildScrollView(
+            controller: bodyController,
+            padding: EdgeInsets.fromLTRB(side, 18, side, 20),
+            child: body,
+          ),
+        ),
+        if (actions.isNotEmpty)
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              side,
+              12,
+              side,
+              12 + (phone ? MediaQuery.paddingOf(context).bottom : 0),
+            ),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: p.lineSoft)),
+            ),
+            child: phone
+                ? Row(
+                    children: [
+                      for (final (i, a) in actions.indexed) ...[
+                        if (i > 0) const SizedBox(width: 8),
+                        Expanded(child: a),
+                      ],
+                    ],
+                  )
+                : Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: actions,
+                  ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Numbered steps of a short flow (Email, Servers, Review): the current one
+/// in the accent, finished ones with a check.
+class ColectoSteps extends StatelessWidget {
+  const ColectoSteps({super.key, required this.labels, required this.current});
+
+  final List<String> labels;
+  final int current;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return Semantics(
+      label: 'Step ${current + 1} of ${labels.length}: ${labels[current]}',
+      excludeSemantics: true,
+      child: Wrap(
+        spacing: 18,
+        runSpacing: 6,
+        children: [
+          for (final (i, label) in labels.indexed)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: 18,
+                  height: 18,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: i == current
+                        ? p.accent
+                        : i < current
+                        ? p.select
+                        : p.control,
+                  ),
+                  child: i < current
+                      ? Icon(LucideIcons.check, size: 11, color: p.accent)
+                      : Text(
+                          '${i + 1}',
+                          style: kStyle(
+                            11,
+                            weight: 600,
+                            color: i == current ? p.accentInk : p.ink2,
+                          ),
+                        ),
+                ),
+                const SizedBox(width: 7),
+                Text(
+                  label,
+                  style: kStyle(
+                    12.5,
+                    weight: i == current ? 560 : 450,
+                    color: i == current
+                        ? p.ink
+                        : i < current
+                        ? p.ink2
+                        : p.ink3,
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
   }
 }

@@ -14,15 +14,28 @@ Future<MailController> pumpColectoApp(
   ColectoPlatformStyle design = ColectoPlatformStyle.desktop,
   MailBackend? backend,
   bool worstCase = false,
+
+  /// False keeps first-run onboarding up, as on a fresh install.
+  bool onboarded = true,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
+  if (!onboarded) {
+    // The welcome's mark floats forever unless motion is reduced.
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+  }
 
   final controller = MailController(
     backend: backend ?? InMemoryMailBackend(worstCase: worstCase),
   )..previewDesign(design);
   await controller.initialize();
+  if (onboarded) {
+    // As if the person chose "Explore with sample mail first".
+    await controller.finishOnboarding(demo: true);
+  }
   addTearDown(controller.dispose);
 
   await tester.pumpWidget(ColectoApp(controller: controller));

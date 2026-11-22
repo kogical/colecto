@@ -20,20 +20,29 @@ class ApiKeysSettingsTab extends StatefulWidget {
 class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
   final _nameCtrl = TextEditingController();
   final Set<String> _accounts = {};
-  final Set<MailCapability> _caps = {
+  final Set<MailCapability> _caps = {};
+
+  /// Days until the new key expires; 0 never expires.
+  int _expiry = 0;
+  String? _secret;
+
+  static const _readOnly = {
     MailCapability.accountRead,
     MailCapability.messagesList,
     MailCapability.messagesRead,
+    MailCapability.draftsList,
+    MailCapability.draftsRead,
   };
-  String? _secret;
+
+  static const _lifetimes = [
+    (0, 'Never'),
+    (1, '1 day'),
+    (7, '1 week'),
+    (30, '30 days'),
+    (90, '90 days'),
+  ];
 
   MailController get c => widget.controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _accounts.add(c.activeAccount);
-  }
 
   @override
   void dispose() {
@@ -41,28 +50,30 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
     super.dispose();
   }
 
+  bool get _ready =>
+      _nameCtrl.text.trim().isNotEmpty &&
+      _accounts.isNotEmpty &&
+      _caps.isNotEmpty;
+
   Future<void> _mint() async {
-    if (_nameCtrl.text.trim().isEmpty) {
-      c.showToast('Name the key first', isError: true);
-      return;
-    }
-    if (_accounts.isEmpty || _caps.isEmpty) {
-      c.showToast(
-        'Pick at least one account and one permission',
-        isError: true,
-      );
-      return;
-    }
     final minted = await c.mintApiKey(
       ApiKeyInput(
         name: _nameCtrl.text.trim(),
         accounts: _accounts.toList(),
         capabilities: _caps.toList(),
+        expiresAt: _expiry == 0
+            ? null
+            : DateTime.now().millisecondsSinceEpoch ~/ 1000 + _expiry * 86400,
       ),
     );
     if (mounted && minted != null) {
       _nameCtrl.clear();
-      setState(() => _secret = minted.secret);
+      setState(() {
+        _secret = minted.secret;
+        _accounts.clear();
+        _caps.clear();
+        _expiry = 0;
+      });
     }
   }
 
@@ -77,6 +88,15 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
     if (ok) await c.revokeApiKey(key.id);
   }
 
+  String _date(int? seconds) => seconds == null
+      ? 'Never'
+      : MaterialLocalizations.of(
+          context,
+        ).formatMediumDate(DateTime.fromMillisecondsSinceEpoch(seconds * 1000));
+
+  String _accountName(String id) =>
+      c.accounts.where((a) => a.id == id).firstOrNull?.displayName ?? id;
+
   @override
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
@@ -84,17 +104,21 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const ColectoPageHead(
-          title: 'API keys & MCP',
+          title: 'API keys',
           description:
-              'Let assistants and scripts use your mail through scoped keys. '
-              'Each key sees only the accounts and actions you allow.',
+              'Give automation access to selected accounts and operations. '
+              'Keys can change only the settings areas you grant them, never '
+              'credentials, connections or keys, and sending only asks you '
+              'for approval; it never sends directly.',
         ),
         ColectoSection(
           children: [
             ColectoSettingRow(
               title: 'MCP server',
               description:
-                  'Serve mail tools at /api/v1/mcp and through colecto-mcp.',
+                  'Lets MCP clients use a key below at /api/v1/mcp and '
+                  'through colecto-mcp. Off until you turn it on; keys keep '
+                  'working over HTTP either way.',
               trailing: ColectoSwitch(
                 value: c.preferences.mcp,
                 onChanged: (v) => c.updatePreferences(PreferencesPatch(mcp: v)),
@@ -102,15 +126,86 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
             ),
           ],
         ),
+        if (_secret != null)
+          Container(
+            margin: const EdgeInsets.only(bottom: 30),
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: p.select,
+              borderRadius: BorderRadius.circular(colectoRadius(context) + 4),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Copy your key now',
+                  style: kStyle(15, weight: 640, color: p.accentHi),
+                ),
+                const SizedBox(height: 4),
+                const ColectoParagraph(
+                  'This secret is shown only here, until you leave or '
+                  'dismiss it.',
+                  small: true,
+                  tone: ColectoTone.secondary,
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: p.sunk,
+                    border: Border.all(color: p.line),
+                    borderRadius: BorderRadius.circular(colectoRadius(context)),
+                  ),
+                  child: SelectableText(
+                    _secret!,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      height: 1.5,
+                      color: p.ink,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    ColectoButton(
+                      label: 'Copy key',
+                      icon: LucideIcons.copy,
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: _secret!));
+                        c.showToast('API key copied');
+                      },
+                    ),
+                    ColectoButton(
+                      label: 'Dismiss secret',
+                      variant: ColectoButtonVariant.text,
+                      onPressed: () => setState(() => _secret = null),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ColectoSection(
           title: 'New key',
+          description:
+              'Choose what the key may reach. You see its secret once, right '
+              'after it is made.',
           children: [
-            SizedBox(
-              width: 420,
-              child: ColectoTextField(
-                controller: _nameCtrl,
-                labelText: 'Name',
-                hintText: 'Claude Desktop',
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 400),
+                child: ColectoTextField(
+                  controller: _nameCtrl,
+                  labelText: 'Key name',
+                  hintText: 'Desktop assistant',
+                  onChanged: (_) => setState(() {}),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -131,7 +226,37 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
               ],
             ),
             const SizedBox(height: 16),
-            const ColectoLabel('Permissions'),
+            Row(children: [const Expanded(child: ColectoLabel('Operations'))]),
+            Wrap(
+              spacing: 14,
+              children: [
+                ColectoButton(
+                  label: 'Read only',
+                  variant: ColectoButtonVariant.text,
+                  onPressed: () => setState(
+                    () => _caps
+                      ..clear()
+                      ..addAll(_readOnly),
+                  ),
+                ),
+                ColectoButton(
+                  label: 'Everything',
+                  variant: ColectoButtonVariant.text,
+                  onPressed: () => setState(
+                    () => _caps
+                      ..clear()
+                      ..addAll(MailCapability.values),
+                  ),
+                ),
+                if (_caps.isNotEmpty)
+                  ColectoButton(
+                    label: 'Clear',
+                    variant: ColectoButtonVariant.text,
+                    onPressed: () => setState(_caps.clear),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -150,108 +275,116 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
                   ),
               ],
             ),
-            const SizedBox(height: 18),
+            if (_caps.contains(MailCapability.messagesSend)) ...[
+              const SizedBox(height: 8),
+              const ColectoParagraph(
+                'Sending always waits for your approval in Settings → Send '
+                'approvals.',
+                small: true,
+                tone: ColectoTone.muted,
+              ),
+            ],
+            const SizedBox(height: 16),
+            const ColectoLabel('Expires'),
+            ColectoSegmented<int>(
+              value: _expiry,
+              options: _lifetimes,
+              onChanged: (v) => setState(() => _expiry = v),
+            ),
+            const SizedBox(height: 20),
             Align(
               alignment: Alignment.centerLeft,
               child: ColectoButton(
-                label: 'Create key',
-                icon: LucideIcons.keyRound,
+                label: 'Generate API key',
                 variant: ColectoButtonVariant.primary,
-                onPressed: _mint,
+                onPressed: _ready ? _mint : null,
               ),
             ),
-            if (_secret != null) ...[
-              const SizedBox(height: 16),
-              ColectoNotice(
-                icon: LucideIcons.keyRound,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Copy this key now. It won’t be shown again.'),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SelectableText(
-                            _secret!,
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12.5,
-                              color: p.ink,
-                            ),
-                          ),
-                        ),
-                        ColectoButton(
-                          label: 'Copy',
-                          icon: LucideIcons.copy,
-                          compact: true,
-                          onPressed: () {
-                            Clipboard.setData(ClipboardData(text: _secret!));
-                            c.showToast('Key copied');
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ],
         ),
         ColectoSection(
-          title: 'Keys',
+          title: 'Issued keys',
           children: [
             if (c.apiKeys.isEmpty)
               const ColectoParagraph(
-                'No keys yet. Nothing outside Colecto can read your mail.',
+                'No API keys yet. Your mail is keeping to itself.',
                 tone: ColectoTone.muted,
               )
             else
               for (final key in c.apiKeys)
                 Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                   decoration: BoxDecoration(
                     border: Border(top: BorderSide(color: p.lineSoft)),
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: ColectoText(
-                                    key.name,
-                                    role: ColectoTextRole.bodyStrong,
-                                    maxLines: 1,
+                      Row(
+                        children: [
+                          Flexible(
+                            child: ColectoText(
+                              key.name,
+                              role: ColectoTextRole.bodyStrong,
+                              maxLines: 1,
+                            ),
+                          ),
+                          if (key.isRevoked) ...[
+                            const SizedBox(width: 8),
+                            const ColectoBadge(text: 'Revoked', danger: true),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      ColectoParagraph(
+                        key.accounts.map(_accountName).join(', '),
+                        small: true,
+                        tone: ColectoTone.secondary,
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final cap in key.capabilities)
+                            Tooltip(
+                              message: cap.label,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: p.sunk,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  cap.wire,
+                                  style: TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                    color: p.ink2,
                                   ),
                                 ),
-                                if (key.isRevoked) ...[
-                                  const SizedBox(width: 8),
-                                  const ColectoBadge(
-                                    text: 'Revoked',
-                                    danger: true,
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
-                            const SizedBox(height: 2),
-                            ColectoText.caption(
-                              '${key.accounts.join(', ')} · '
-                              '${key.capabilities.map((e) => e.label).join(', ')}',
-                            ),
-                          ],
-                        ),
+                        ],
                       ),
-                      if (!key.isRevoked)
+                      const SizedBox(height: 6),
+                      ColectoText.caption(
+                        'Created ${_date(key.createdAt)} · Last used '
+                        '${_date(key.lastUsedAt)} · Expires '
+                        '${_date(key.expiresAt)}'
+                        '${key.revokedAt != null ? ' · Revoked ${_date(key.revokedAt)}' : ''}',
+                      ),
+                      if (!key.isRevoked) ...[
+                        const SizedBox(height: 8),
                         ColectoButton(
-                          label: 'Revoke',
-                          variant: ColectoButtonVariant.danger,
+                          label: 'Revoke key',
                           compact: true,
                           onPressed: () => _revoke(key),
                         ),
+                      ],
                     ],
                   ),
                 ),
@@ -277,12 +410,12 @@ class SendApprovalsSettingsTab extends StatelessWidget {
         ColectoPageHead(
           title: 'Send approvals',
           description:
-              'Mail that assistants and scripts want to send waits here until '
-              'you approve it.',
+              'Automation cannot send until you approve the exact message '
+              'below. Requests expire after 10 minutes, and any change needs '
+              'a new request.',
           action: ColectoButton(
             label: 'Refresh',
             icon: LucideIcons.refreshCw,
-            variant: ColectoButtonVariant.ghost,
             onPressed: controller.loadSendRequests,
           ),
         ),
@@ -290,8 +423,7 @@ class SendApprovalsSettingsTab extends StatelessWidget {
           const ColectoSection(
             children: [
               ColectoParagraph(
-                'Nothing is waiting. Requests appear here and as a '
-                'notification.',
+                'Nothing waiting for you. Automation is behaving.',
                 tone: ColectoTone.muted,
               ),
             ],

@@ -262,8 +262,15 @@ opens the new account's Inbox. **Explore with sample mail first** skips setup an
 turns the demo account on. Onboarding shows while the owner preference `onboarded`
 is false and no real account exists; the built-in demo account never counts as an
 added account. Finishing or skipping sets `onboarded` to true. It lives in the shell
-(`ui/src/Onboarding.svelte`), not an extension, because it is bootstrapping and
+(`app/lib/ui/features/onboarding/`), not Settings, because it is bootstrapping and
 handles credentials.
+
+The demo account is sample mail kept in memory: a few weeks of messages, a
+conversation, and Inbox, Sent, Archive and Trash folders. Everything works on it
+without a server: replies and new messages are filed in its Sent folder (nothing
+leaves the device), and starring, labels, archiving and Trash behave as on a real
+account. Its folders reset when the service restarts; its drafts and labels are
+kept.
 
 Every account row in Settings → Accounts has an on/off switch, stored in the owner
 preference `accounts_enabled` (`{ "<account id>": bool }`, merged on update, at most
@@ -280,6 +287,40 @@ every other account is on.**
 Turning off the open account switches to another account that is on. With every
 account off, the mail pane says so and links to Settings → Accounts. Removing an
 account also forgets its on/off choice.
+
+## Backups
+
+Settings → Backup exports a zip that any Colecto app or daemon can restore, and
+restores one. It holds the accounts' settings, drafts, labels, preferences, API keys
+and AI settings. Message lists and downloaded mail are left out; they come back from
+the mail servers. Restoring replaces all of that on the receiving side.
+
+- **Locked with a passphrase** (the default in the app): the contents, including the
+  saved passwords and AI service keys, are encrypted with XChaCha20-Poly1305 under an
+  Argon2id key (64 MiB, 3 passes). Restoring asks for the passphrase. A lost
+  passphrase cannot be recovered.
+- **Without a passphrase**: the contents are plain JSON and no passwords are
+  included. Restored accounts show *Signed out* until you sign in again, and the
+  receiving side keeps its own AI service keys.
+
+Saved passwords are written into the receiving side's credential store, so its
+credentials must be unlocked first. A daemon without a system keychain needs a master
+password before it can take a backup with passwords in it.
+
+The format is `manifest.json` (format, version, schema, date, whether it is sealed)
+beside `data.json` or `data.sealed`. A backup made by a newer Colecto is refused.
+
+On a daemon, with the daemon stopped:
+
+```sh
+COLECTO_BACKUP_PASSPHRASE='…' colecto-daemon export backup.zip
+COLECTO_BACKUP_PASSPHRASE='…' colecto-daemon import backup.zip
+```
+
+`COLECTO_MASTER_PASSWORD` unlocks credentials protected by a master password. The
+same backups go through the API as `POST /api/v1/backup/export`
+(`{"passphrase": "…"}` → `{"filename", "data"}` with the zip in base64) and
+`POST /api/v1/backup/import` (`{"data", "passphrase"}`); both are owner-only.
 
 ## Remove an account
 

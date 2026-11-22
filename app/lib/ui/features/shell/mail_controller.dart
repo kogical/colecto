@@ -1085,33 +1085,42 @@ class MailController extends ChangeNotifier {
   Future<void> selectThread(ConversationThread thread) async {
     final epoch = ++_threadEpoch;
     final account = _activeAccount;
+    final folder = _activeFolder;
     final latest = thread.latest;
+    final fallback = [
+      for (final m in thread.messages)
+        ThreadMessage(folder: folder, message: m),
+    ];
     _remember(thread);
     _selectedMessageId = latest.id;
+    _conversation = fallback;
     _compose = null;
     notifyListeners();
 
     try {
       final conversation = await _backend.conversation(account, latest.id);
       if (epoch != _threadEpoch || account != _activeAccount) return;
-      _conversation = conversation;
+      _conversation = conversation.isNotEmpty ? conversation : fallback;
       notifyListeners();
-      for (final tm in _conversation) {
-        unawaited(loadMessageContent(tm.message.id));
-      }
-      if (thread.hasUnread) {
-        final unreadIds = thread.messages
-            .where((m) => !m.seen)
-            .map((m) => m.id)
-            .toList(growable: false);
-        if (unreadIds.isNotEmpty) {
-          await organizeMessages('flags', ids: unreadIds, seen: true);
-        }
-      }
-      unawaited(loadSummary(latest.id));
     } on MailBackendException catch (e) {
-      if (epoch == _threadEpoch) showToast(e.message, isError: true);
+      if (epoch != _threadEpoch || account != _activeAccount) return;
+      showToast(e.message, isError: true);
     }
+
+    if (epoch != _threadEpoch || account != _activeAccount) return;
+    for (final tm in _conversation) {
+      unawaited(loadMessageContent(tm.message.id));
+    }
+    if (thread.hasUnread) {
+      final unreadIds = thread.messages
+          .where((m) => !m.seen)
+          .map((m) => m.id)
+          .toList(growable: false);
+      if (unreadIds.isNotEmpty) {
+        await organizeMessages('flags', ids: unreadIds, seen: true);
+      }
+    }
+    unawaited(loadSummary(latest.id));
   }
 
   void clearSelection() {

@@ -24,6 +24,7 @@ Colecto is built by AI agents with one human maintainer. These rules apply to ev
    - **Android:** Material 3 (`material_ui`) with `dynamic_color` (Material You on by default; the accent setting overrides it).
    - **iOS:** Cupertino (`cupertino_ui`).
    Screens use only the Colecto kit (`app/lib/ui/core/kit/`: `ColectoButton`, `ColectoText`, `ColectoTextField`, `ColectoSwitch`, menus, dialogs…), which maps each component onto the active design. Never import a design library in feature code; add or extend a kit component instead. Share business logic, controllers, and core mail views; branch only in the kit and the navigation shell. Those are defaults, not limits: any design must work on any platform and at every window size, and owners pick theirs in Settings → Appearance → Design (`Preferences.design`). Preview with `just run demo linux <design>` (`colecto`, `fluent`, `macos`, `material`, `cupertino`).
+   - **Context menus are strictly for right-click / long-tap.** Never call `showColectoContextMenu` for normal button taps (account switchers, More buttons, dropdown pickers, etc.). On touch/mobile, normal taps MUST open a modal (`showColectoModalPicker` or a dedicated `colectoModalRoute` screen) instead.
 5. **Untrusted HTML email safety & RAM discipline.**
    - Sanitize HTML in Rust (strip scripts/forms, block remote images by default, rewrite `cid:` inline images).
    - Render plain-text and simple messages natively in Flutter.
@@ -44,7 +45,7 @@ Ship a release only when the maintainer asks for one in the current session. The
 ## Verification
 
 - Follow [docs/testing.md](docs/testing.md): **quality over quantity**, favor integration tests over granular unit-test sprawl, limit E2E tests to critical paths, and keep tests fast and parallelizable across workers.
-- Run `just verify` to execute the full Rust + Flutter verification suite (see `just --list --list-submodules` for all recipes in `justfile` and `just/*.just`).
+- Run `just verify` to execute the full Rust + Flutter verification suite (see `just --list --list-submodules` for all recipes in `justfile` and `scripts/just/*.just`).
 - **Rust changes:** `just check fmt-rust`, `just check lint`, `just test rust` (`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo nextest` / `cargo test --workspace --locked`).
 - **Flutter/Dart changes:** `just check fmt-app`, `just check app`, `just test app` (`dart format --output=none --set-exit-if-changed .`, `flutter analyze`, `flutter test --concurrency=<workers>`).
 - Check system memory/CPU constraints before heavy builds; never run concurrent Cargo builds on the same target directory.

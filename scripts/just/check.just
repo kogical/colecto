@@ -1,4 +1,4 @@
-set working-directory := '..'
+set working-directory := '../..'
 
 # Run every static check: formatting, Rust compile/clippy, and Flutter analysis.
 [default]

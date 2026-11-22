@@ -177,7 +177,6 @@ class _ApiKeysSettingsTabState extends State<ApiKeysSettingsTab> {
                       icon: LucideIcons.copy,
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: _secret!));
-                        c.showToast('API key copied');
                       },
                     ),
                     ColectoButton(

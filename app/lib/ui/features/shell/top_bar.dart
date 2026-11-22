@@ -435,6 +435,18 @@ class AccountSwitcher extends StatelessWidget {
 }
 
 void showAccountMenu(BuildContext anchorContext, MailController c) {
+  if (colectoTouch(anchorContext)) {
+    final style = colectoPlatformStyle(anchorContext);
+    Navigator.of(anchorContext).push<void>(
+      colectoModalRoute(
+        anchorContext,
+        style: style,
+        fullscreen: style == ColectoPlatformStyle.android,
+        builder: (ctx) => _AccountSwitcherModal(controller: c),
+      ),
+    );
+    return;
+  }
   final items = [
     for (final a in c.enabledAccounts)
       ColectoMenuItem(
@@ -450,20 +462,121 @@ void showAccountMenu(BuildContext anchorContext, MailController c) {
       onSelected: () => c.openSettings(SettingsSection.accounts),
     ),
   ];
-  if (colectoTouch(anchorContext)) {
-    showColectoContextMenu(
-      context: anchorContext,
-      globalPosition: colectoRectOf(anchorContext).center,
-      title: 'Accounts',
-      items: items,
-    );
-  } else {
-    showColectoMenu(
-      context: anchorContext,
-      anchor: colectoRectOf(anchorContext),
-      items: items,
-      width: 260,
-      alignRight: !(colectoRectOf(anchorContext).left < 200),
+  showColectoMenu(
+    context: anchorContext,
+    anchor: colectoRectOf(anchorContext),
+    items: items,
+    width: 260,
+    alignRight: !(colectoRectOf(anchorContext).left < 200),
+  );
+}
+
+class _AccountSwitcherModal extends StatelessWidget {
+  const _AccountSwitcherModal({required this.controller});
+
+  final MailController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    final c = controller;
+    return ColoredBox(
+      color: p.bg,
+      child: Column(
+        children: [
+          ColectoNavBar(
+            title: 'Accounts',
+            onClose: () => Navigator.of(context).pop(),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                for (final a in c.enabledAccounts)
+                  ColectoPressable(
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      c.selectAccount(a.id);
+                    },
+                    builder: (context, s) => Container(
+                      color: s.hovered ? p.raise : const Color(0x00000000),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          ColectoAvatar(
+                            name: a.displayName,
+                            hueKey: a.address,
+                            size: 36,
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  a.displayName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: kStyle(15, weight: 600, color: p.ink),
+                                ),
+                                if (a.address.isNotEmpty &&
+                                    a.address != a.displayName)
+                                  Text(
+                                    a.address,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: kStyle(12.5, color: p.ink3),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (a.id == c.activeAccount) ...[
+                            const SizedBox(width: 12),
+                            Icon(LucideIcons.check, size: 18, color: p.accent),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                Divider(height: 16, color: p.lineSoft),
+                ColectoPressable(
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    c.openSettings(SettingsSection.accounts);
+                  },
+                  builder: (context, s) => Container(
+                    color: s.hovered ? p.raise : const Color(0x00000000),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 13,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          LucideIcons.userRoundPlus,
+                          size: 18,
+                          color: p.ink2,
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text(
+                            'Add or manage accounts…',
+                            style: kStyle(15, weight: 500, color: p.ink),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -633,7 +633,8 @@ class _MessageListPaneState extends State<MessageListPane> {
             flagged: !t.flagged,
           ),
         ),
-        if (labels.isNotEmpty) const ColectoMenuItem.divider(),
+        if (labels.isNotEmpty || c.aiSettings.settings.enabled)
+          const ColectoMenuItem.divider(),
         for (final name in labels)
           ColectoMenuItem(
             label: 'Label: $name',
@@ -644,6 +645,12 @@ class _MessageListPaneState extends State<MessageListPane> {
               messageId: t.latest.id,
               remove: c.labels[name]?.contains(t.latest.id) ?? false,
             ),
+          ),
+        if (c.aiSettings.settings.enabled)
+          ColectoMenuItem(
+            label: 'Check labels again',
+            icon: LucideIcons.sparkles,
+            onSelected: () => c.reclassifyMessages(ids),
           ),
         const ColectoMenuItem.divider(),
         if (archive != null && archive.id != c.activeFolder)
@@ -730,8 +737,10 @@ class _MessageListPaneState extends State<MessageListPane> {
   // ── Footer ────────────────────────────────────────────────────────────
 
   Widget _footer(ColectoPalette p, bool isDrafts) {
-    final count = isDrafts ? c.drafts.length : c.threads.length;
-    final noun = isDrafts ? 'draft' : 'conversation';
+    final count = isDrafts ? c.drafts.length : c.messages.length;
+    final countLabel = isDrafts
+        ? (count == 1 ? '1 draft' : '$count drafts')
+        : (count == 1 ? '1 message loaded' : '$count messages loaded');
     final sync = c.currentAccountSync;
     final syncing = c.refreshing || sync?.activity == SyncActivity.syncing;
     final status = sync?.error != null
@@ -749,7 +758,7 @@ class _MessageListPaneState extends State<MessageListPane> {
         children: [
           Expanded(
             child: Text(
-              count == 1 ? '1 $noun' : '$count ${noun}s',
+              countLabel,
               style: kStyle(12, color: p.ink3, features: tabularFigures),
             ),
           ),
@@ -1648,9 +1657,8 @@ class _FolderTabs extends StatelessWidget {
                     ),
                 ];
                 if (colectoTouch(ctx)) {
-                  showColectoContextMenu(
+                  showColectoModalPicker(
                     context: ctx,
-                    globalPosition: colectoRectOf(ctx).center,
                     title: 'Mailboxes',
                     items: items,
                   );

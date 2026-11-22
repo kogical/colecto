@@ -337,11 +337,17 @@ class _ReaderPaneState extends State<ReaderPane> {
         icon: LucideIcons.wandSparkles,
         onSelected: () => setState(() => _aiReplyOpen = true),
       ),
+      if (c.aiSettings.settings.enabled)
+        ColectoMenuItem(
+          label: 'Check labels again',
+          icon: LucideIcons.tag,
+          onSelected: () => c.reclassifyMessages([latest.id]),
+        ),
     ];
     if (colectoTouch(context)) {
-      showColectoContextMenu(
+      showColectoModalPicker(
         context: context,
-        globalPosition: rect.center,
+        title: 'Message actions',
         items: items,
       );
     } else {
@@ -363,7 +369,6 @@ class _ReaderPaneState extends State<ReaderPane> {
     );
     if (!mounted) return;
     setState(() => _copied = true);
-    c.showToast('Message text copied');
   }
 
   // ── Letter ────────────────────────────────────────────────────────────
@@ -874,12 +879,11 @@ class _ReaderPaneState extends State<ReaderPane> {
         m.id,
         a.index,
       );
-      final saved = await saveBytes(
+      await saveBytes(
         name: file.name,
         contentType: file.contentType,
         bytes: file.bytes,
       );
-      if (saved) c.showToast('Saved ${file.name}');
     } on UnsupportedError catch (e) {
       c.showToast('Can’t save here yet', detail: e.message, isError: true);
     } catch (e) {

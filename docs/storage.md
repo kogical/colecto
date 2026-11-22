@@ -91,33 +91,29 @@ they keep the file readable this way.
 ### Records
 
 `Database` exposes records through `get_record`, `set_record`, `initialize_record` and
-`remove_record`, never raw SQL to clients or extensions. Namespace and name are at most
+`remove_record`, never raw SQL to clients. Namespace and name are at most
 256 bytes, values at most 32 MB. Callers validate their own serialized formats.
 
 | Namespace | Name | Contents |
 | --- | --- | --- |
 | `core` | `vault` | Account registry and the XChaCha20-Poly1305 credential vault (format version 1 inside) |
 | `account:<id>` | `folders` | The last successful folder discovery |
-| `host` | `extensions`, `extension-settings`, `extension-storage` | Disabled extensions and installed packages' manifests, extension settings the owner changed, each extension's key-value store |
-| `host` | `ai-summaries` | Saved AI summaries |
-| `extension-packages` | `<extension id>` | Installed package bytes |
 
 A missing record reads as empty or default and is not written until something changes.
-Records that only the Host reads accept unknown fields, so a field added later does not
-break them. The vault rejects unknown fields, because its account list is the
-authenticated data of the encryption.
+The vault rejects unknown fields, because its account list is the authenticated data of
+the encryption.
 
 ### Settings
 
-Defaults live in code: `Preferences` in `crates/colecto-host/src/preferences.rs`
-(scope `core`), `AiSettings` in `ai.rs` (scope `ai`), and extension manifests for
-extension settings. The database holds only keys the owner changed, so changing a
-default in a release reaches everyone who never changed that setting.
+Defaults live in code: `Preferences` in `crates/colecto-service/src/preferences.rs`
+(scope `core`) and `AiSettings` in `crates/colecto-service/src/ai.rs` (scope `ai`). The
+database holds only keys the owner changed, so changing a default in a release reaches
+everyone who never changed that setting.
 
 - Keys are dotted paths to a setting, such as `notifications.position` or
-  `text_spacing.letter`. A nested struct is split into its fields; a map that starts
-  empty (`accounts_enabled`, AI `labels`) or a value that starts as `null`
-  (`workspace`, `accent`) is one key.
+  `text_spacing.letter`. A nested struct is split into its fields; a map or list that
+  starts empty (`accounts_enabled`, `account_order`, AI `labels`) or a value that starts
+  as `null` (`workspace`, `accent`) is one key.
 - A save stores the keys whose value changed, even when the new value equals today's
   default: the owner chose it. `POST /api/v1/preferences` takes `reset: ["key", …]` to
   forget keys so they follow the default again; an empty `accent` does the same.
@@ -126,11 +122,8 @@ default in a release reaches everyone who never changed that setting.
   Colecto from starting.
 - `GET` and `POST /api/v1/preferences` return the preferences plus `changed`, the keys
   stored now. Settings shows a reset for a group once one of its keys is in `changed`.
-- Extension settings follow the same rule: `PUT /api/v1/extensions/{id}/settings`
-  stores the values sent, and the owner-only
-  `POST /api/v1/extensions/{id}/settings/reset` with `{"keys": […]}` forgets them.
 
-The helpers are `load_settings` and `save_settings` in `crates/colecto-host/src/store.rs`.
+The helpers are `load_settings` and `save_settings` in `crates/colecto-service/src/store.rs`.
 
 ## Credentials
 

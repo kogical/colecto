@@ -67,8 +67,97 @@ fn is_remote_url(value: &str) -> bool {
     has_scheme(value, "http://") || has_scheme(value, "https://") || value.starts_with("//")
 }
 
+/// Safe, URL-free CSS properties allowed inside inline `style="..."` attributes.
+///
+/// Deliberately excludes properties that can load external resources (`background`,
+/// `background-image`, `list-style`, `list-style-image`, `cursor`, `content`,
+/// `mask`, `mask-image`, `filter`, `clip-path`) or escape the message container
+/// (`position`, `z-index`, `top`, `right`, `bottom`, `left`, `transform`).
+const SAFE_STYLE_PROPERTIES: &[&str] = &[
+    // Sizing & box model
+    "width",
+    "max-width",
+    "min-width",
+    "height",
+    "max-height",
+    "min-height",
+    "display",
+    "box-sizing",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "vertical-align",
+    "float",
+    "clear",
+    "margin",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    // Tables
+    "border-collapse",
+    "border-spacing",
+    "table-layout",
+    // Colors & borders (no `background` shorthand or `background-image`)
+    "color",
+    "background-color",
+    "border",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-color",
+    "border-top-color",
+    "border-right-color",
+    "border-bottom-color",
+    "border-left-color",
+    "border-width",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "border-style",
+    "border-top-style",
+    "border-right-style",
+    "border-bottom-style",
+    "border-left-style",
+    "border-radius",
+    "border-top-left-radius",
+    "border-top-right-radius",
+    "border-bottom-left-radius",
+    "border-bottom-right-radius",
+    "opacity",
+    "visibility",
+    // Typography
+    "font",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "font-variant",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "text-align",
+    "text-decoration",
+    "text-indent",
+    "text-transform",
+    "white-space",
+    "word-break",
+    "word-wrap",
+    "overflow-wrap",
+    "list-style-type",
+    "direction",
+];
+
 /// Sanitize untrusted HTML email markup:
-/// - strips scripts, styles, forms, iframes, objects, SVGs, and inline event handlers
+/// - strips scripts, `<style>` blocks, forms, iframes, objects, SVGs, and inline event handlers
+/// - preserves a strict allowlist of URL-free inline CSS properties in `style` attributes
 /// - drops `javascript:`, `vbscript:`, and untrusted `data:` URLs
 /// - blocks remote images unless `options.allow_remote_images` is true, counting blocked ones
 /// - rewrites valid `cid:` image references to safe raster `data:` URIs after sanitization
@@ -100,6 +189,11 @@ pub fn sanitize(
     builder.url_schemes(HashSet::from(["http", "https", "mailto", "cid"]));
     builder.url_relative(ammonia::UrlRelative::Deny);
     builder.link_rel(Some("noopener noreferrer"));
+    builder.add_generic_attributes(["style"]);
+    builder.filter_style_properties(SAFE_STYLE_PROPERTIES.iter().copied().collect());
+    for tag in ["div", "p", "h1", "h2", "h3", "h4", "h5", "h6"] {
+        builder.add_tag_attributes(tag, ["align"]);
+    }
     builder.rm_generic_attributes(["srcset", "poster", "background"]);
     builder.attribute_filter(move |element, attribute, value| {
         let trimmed = value.trim();
@@ -302,5 +396,61 @@ mod tests {
                 sanitized.html
             );
         }
+    }
+
+    #[test]
+    fn preserves_safe_inline_styles_and_strips_dangerous_css_properties() {
+        let dirty = r##"
+            <div style="display:none; max-height:0px; overflow:hidden;">Preheader</div>
+            <table width="600" bgcolor="#ffffff" style="background-color:#ffffff; border-radius:8px; background-image:url(https://track.test/bg.png); position:fixed; z-index:9999;">
+              <tr>
+                <td align="center" style="padding:16px; color:#24292f; background:url(https://track.test/cell.gif) no-repeat;">
+                  <img src="https://cdn.test/logo.png" width="32" height="32" style="width:32px; height:32px; border-radius:50%;">
+                  <a href="https://example.test/run" style="display:inline-block; background-color:#2da44e; color:#ffffff; padding:8px 16px; border-radius:6px; text-decoration:none;">View run</a>
+                </td>
+              </tr>
+            </table>
+        "##;
+        let sanitized = sanitize(dirty, &BTreeMap::new(), SanitizeOptions::default());
+        let out = &sanitized.html;
+
+        // Safe layout, sizing, typography, and hidden-preheader styles survive.
+        assert!(
+            out.contains("display:none"),
+            "expected display:none in {out}"
+        );
+        assert!(
+            out.contains("background-color:#ffffff"),
+            "expected background-color in {out}"
+        );
+        assert!(
+            out.contains("border-radius:8px"),
+            "expected border-radius in {out}"
+        );
+        assert!(out.contains("padding:16px"), "expected padding in {out}");
+        assert!(out.contains("color:#24292f"), "expected color in {out}");
+        assert!(out.contains("width:32px"), "expected width in {out}");
+        assert!(out.contains("height:32px"), "expected height in {out}");
+        assert!(
+            out.contains(r#"width="32""#),
+            "expected width attr in {out}"
+        );
+        assert!(
+            out.contains(r#"height="32""#),
+            "expected height attr in {out}"
+        );
+
+        // Dangerous/tracking CSS properties are stripped.
+        assert!(!out.contains("track.test"), "leaked CSS tracker URL: {out}");
+        assert!(
+            !out.contains("background-image"),
+            "leaked background-image: {out}"
+        );
+        assert!(
+            !out.contains("position:fixed"),
+            "leaked position:fixed: {out}"
+        );
+        assert!(!out.contains("z-index"), "leaked z-index: {out}");
+        assert_eq!(sanitized.blocked_remote_images, 1);
     }
 }

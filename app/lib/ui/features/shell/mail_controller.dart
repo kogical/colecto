@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -70,6 +71,7 @@ class ComposeRequest {
     this.references = '',
     this.forwardOf,
     this.replyMessageId,
+    this.attachments = const [],
     this.heading = 'New message',
   });
 
@@ -82,6 +84,7 @@ class ComposeRequest {
   final String references;
   final String? forwardOf;
   final String? replyMessageId;
+  final List<OutgoingAttachment> attachments;
 
   /// `New message`, `Reply`, `Forward` or `Your draft`.
   final String heading;
@@ -132,6 +135,10 @@ class MailController extends ChangeNotifier {
   int _reloadEpoch = 0;
   int _toastSeq = 0;
   final Map<int, Timer> _toastTimers = {};
+  final Map<int, _PendingSend> _pendingSends = {};
+  int _pendingSendSeq = 0;
+
+  bool get hasPendingSends => _pendingSends.isNotEmpty;
 
   int get reloadEpoch => _reloadEpoch;
 
@@ -262,7 +269,6 @@ class MailController extends ChangeNotifier {
     _sortedThreadsCache = null;
     notifyListeners();
     await initialize();
-    showToast('App reloaded');
   }
 
   /// Browser-like zoom steps, in percent.
@@ -271,24 +277,34 @@ class MailController extends ChangeNotifier {
   /// Whole-interface zoom as a factor (1.0 = 100 %).
   double get zoom => (_preferences.zoom ?? 100) / 100;
 
-  int? _zoomToast;
+  bool _zoomHintShown = false;
 
-  Future<void> _setZoom(int percent) async {
+  Future<void> _setZoom(int percent, {String? undoKey}) async {
+    final prev = _preferences.zoom ?? 100;
     await updatePreferences(PreferencesPatch(zoom: percent));
-    // One zoom notice that updates, not a stack of them.
-    if (_zoomToast != null) dismissToast(_zoomToast!);
-    _zoomToast = showToast('Zoom $percent%');
+    if (!_zoomHintShown && percent != prev && undoKey != null) {
+      _zoomHintShown = true;
+      final mod = defaultTargetPlatform == TargetPlatform.macOS ? '⌘' : 'Ctrl';
+      showToast(
+        'Zoom $percent%',
+        detail: 'Press $mod$undoKey to undo, or ${mod}0 to reset.',
+      );
+    }
   }
 
   Future<void> zoomIn() {
     final now = _preferences.zoom ?? 100;
-    return _setZoom(zoomSteps.firstWhere((s) => s > now, orElse: () => 200));
+    return _setZoom(
+      zoomSteps.firstWhere((s) => s > now, orElse: () => 200),
+      undoKey: '-',
+    );
   }
 
   Future<void> zoomOut() {
     final now = _preferences.zoom ?? 100;
     return _setZoom(
       zoomSteps.lastWhere((s) => s < now, orElse: () => zoomSteps.first),
+      undoKey: '+',
     );
   }
 
@@ -417,12 +433,40 @@ class MailController extends ChangeNotifier {
   SecurityInfo get security => _security;
   Preferences get preferences => _preferences;
 
-  List<AccountInfo> get accounts => _accounts;
+  List<AccountInfo> get accounts {
+    final order = _preferences.accountOrder;
+    if (order.isEmpty || _accounts.length < 2) return _accounts;
+    final rank = {for (var i = 0; i < order.length; i++) order[i]: i};
+    final sorted = List<AccountInfo>.from(_accounts);
+    sorted.sort((a, b) {
+      final ra = rank[a.id];
+      final rb = rank[b.id];
+      if (ra != null && rb != null) return ra.compareTo(rb);
+      if (ra != null) return -1;
+      if (rb != null) return 1;
+      return 0;
+    });
+    return sorted;
+  }
+
   List<AccountInfo> get enabledAccounts {
-    final enabled = _accounts
+    final ordered = accounts;
+    final enabled = ordered
         .where((a) => _preferences.accountEnabled(a.id))
         .toList(growable: false);
-    return enabled.isNotEmpty ? enabled : _accounts;
+    return enabled.isNotEmpty ? enabled : ordered;
+  }
+
+  Future<void> reorderAccounts(int oldIndex, int newIndex) async {
+    final list = List<AccountInfo>.from(accounts);
+    if (oldIndex < 0 || oldIndex >= list.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    if (newIndex < 0 || newIndex >= list.length || newIndex == oldIndex) return;
+    final moved = list.removeAt(oldIndex);
+    list.insert(newIndex, moved);
+    await updatePreferences(
+      PreferencesPatch(accountOrder: [for (final a in list) a.id]),
+    );
   }
 
   String get activeAccount => _activeAccount;
@@ -534,31 +578,48 @@ class MailController extends ChangeNotifier {
     notifyListeners();
   }
 
-  int? showToast(String message, {bool isError = false, String? detail}) {
-    if (!_preferences.notifications.enabled && !isError) return null;
+  int? showToast(
+    String message, {
+    bool isError = false,
+    String? detail,
+    String? actionLabel,
+    VoidCallback? onAction,
+    Duration duration = const Duration(seconds: 6),
+    bool allowHoverHold = true,
+  }) {
+    if (!_preferences.notifications.enabled && !isError && onAction == null) {
+      return null;
+    }
     final id = ++_toastSeq;
     _toasts.add(
-      ColectoToast(id: id, message: message, detail: detail, isError: isError),
+      ColectoToast(
+        id: id,
+        message: message,
+        detail: detail,
+        isError: isError,
+        actionLabel: actionLabel,
+        onAction: onAction,
+        allowHoverHold: allowHoverHold,
+      ),
     );
     if (_toasts.length > 4) {
       final evicted = _toasts.removeAt(0);
       _toastTimers.remove(evicted.id)?.cancel();
     }
     notifyListeners();
-    _armToast(id);
+    _armToast(id, duration: duration);
     return id;
   }
 
-  // Notifications leave after six seconds unless hovered.
-  void _armToast(int id) {
+  // Notifications leave after their duration (default six seconds) unless hovered.
+  void _armToast(int id, {Duration duration = const Duration(seconds: 6)}) {
     _toastTimers.remove(id)?.cancel();
-    _toastTimers[id] = Timer(
-      const Duration(seconds: 6),
-      () => dismissToast(id),
-    );
+    _toastTimers[id] = Timer(duration, () => dismissToast(id));
   }
 
   void holdToast(int id, bool hold) {
+    final toast = _toasts.where((t) => t.id == id).firstOrNull;
+    if (toast == null || !toast.allowHoverHold) return;
     if (hold) {
       _heldToasts.add(id);
       _toastTimers.remove(id)?.cancel();
@@ -1206,9 +1267,11 @@ class MailController extends ChangeNotifier {
     String? folder,
   }) async {
     if (ids.isEmpty) return;
+    final account = _activeAccount;
+    final previousFolder = _activeFolder;
     try {
       await _backend.organizeMessages(
-        _activeAccount,
+        account,
         action,
         ids: ids,
         seen: seen,
@@ -1222,13 +1285,41 @@ class MailController extends ChangeNotifier {
           _conversation = const [];
         }
         _bulkSelectedIds.removeAll(ids);
-        showToast(switch (action) {
-          'archive' => 'Archived ${_plural(ids.length, 'message')}',
-          'delete' => 'Moved ${_plural(ids.length, 'message')} to Trash',
-          _ => 'Moved ${_plural(ids.length, 'message')}',
-        });
+        showToast(
+          switch (action) {
+            'archive' => 'Archived ${_plural(ids.length, 'message')}',
+            'delete' => 'Moved ${_plural(ids.length, 'message')} to Trash',
+            _ => 'Moved ${_plural(ids.length, 'message')}',
+          },
+          actionLabel: 'Undo',
+          onAction: () => _undoMove(
+            account: account,
+            ids: List<String>.from(ids),
+            targetFolder: previousFolder,
+          ),
+        );
       }
       await loadMailbox(refresh: false);
+    } on MailBackendException catch (e) {
+      showToast(e.message, isError: true);
+    }
+  }
+
+  Future<void> _undoMove({
+    required String account,
+    required List<String> ids,
+    required String targetFolder,
+  }) async {
+    try {
+      await _backend.organizeMessages(
+        account,
+        'move',
+        ids: ids,
+        folder: targetFolder,
+      );
+      if (account == _activeAccount) {
+        await loadMailbox(refresh: false);
+      }
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     }
@@ -1265,12 +1356,105 @@ class MailController extends ChangeNotifier {
     try {
       final saved = await _backend.saveDraft(_activeAccount, input);
       _drafts = await _backend.drafts(_activeAccount);
-      if (!quiet) showToast('Draft saved');
       notifyListeners();
       return saved;
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
       return null;
+    }
+  }
+
+  /// Grace period before an outgoing message is actually dispatched.
+  static const sendDelay = Duration(seconds: 5);
+
+  /// Duration of the Undo toast during the grace period (0.5 s shorter than
+  /// [sendDelay] so the user can never tap Undo after dispatch).
+  static const sendUndoToastDuration = Duration(milliseconds: 4500);
+
+  /// Queues [input] for dispatch after [sendDelay] (5 s), showing a 4.5 s
+  /// "Email sent" notification with an Undo action that cancels dispatch and
+  /// reopens the composer with the message intact.
+  void scheduleSend(DraftInput input) {
+    final account = _activeAccount;
+    final token = ++_pendingSendSeq;
+    final toastId = showToast(
+      'Email sent',
+      actionLabel: 'Undo',
+      duration: sendUndoToastDuration,
+      allowHoverHold: false,
+      onAction: () {
+        final pending = _pendingSends.remove(token);
+        if (pending == null) return;
+        pending.timer.cancel();
+        startCompose(
+          ComposeRequest(
+            draftId: input.id,
+            to: input.recipient,
+            cc: input.cc,
+            subject: input.subject,
+            body: input.body,
+            attachments: input.attachments,
+          ),
+        );
+      },
+    );
+    final timer = Timer(sendDelay, () {
+      _pendingSends.remove(token);
+      if (_disposed) return;
+      unawaited(_dispatchScheduledSend(account, input));
+    });
+    _pendingSends[token] = _PendingSend(
+      timer: timer,
+      account: account,
+      input: input,
+      toastId: toastId,
+    );
+  }
+
+  /// Skips the remaining 5-second grace period for all queued outgoing emails,
+  /// immediately dismisses their Undo notifications, and dispatches them now.
+  Future<void> flushPendingSends() async {
+    if (_pendingSends.isEmpty) return;
+    final batch = _pendingSends.values.toList(growable: false);
+    _pendingSends.clear();
+    final futures = <Future<void>>[];
+    for (final pending in batch) {
+      pending.timer.cancel();
+      if (pending.toastId != null) {
+        dismissToast(pending.toastId!);
+      }
+      futures.add(_dispatchScheduledSend(pending.account, pending.input));
+    }
+    await Future.wait(futures);
+  }
+
+  Future<void> _dispatchScheduledSend(String account, DraftInput input) async {
+    try {
+      final outcome = await _backend.send(account, input);
+      if (_disposed) return;
+      if (outcome.requiresApproval) {
+        showToast(
+          'Waiting for approval',
+          detail: 'Approve it in Settings → Send approvals to send it.',
+        );
+        unawaited(loadSendRequests());
+      }
+      if (account == _activeAccount) {
+        await loadMailbox(refresh: false);
+      }
+    } on MailBackendException catch (e) {
+      if (_disposed) return;
+      showToast(e.message, isError: true);
+      startCompose(
+        ComposeRequest(
+          draftId: input.id,
+          to: input.recipient,
+          cc: input.cc,
+          subject: input.subject,
+          body: input.body,
+          attachments: input.attachments,
+        ),
+      );
     }
   }
 
@@ -1283,8 +1467,6 @@ class MailController extends ChangeNotifier {
           detail: 'Approve it in Settings → Send approvals to send it.',
         );
         unawaited(loadSendRequests());
-      } else {
-        showToast('Message sent');
       }
       await loadMailbox(refresh: false);
       return outcome;
@@ -1355,7 +1537,6 @@ class MailController extends ChangeNotifier {
     try {
       await _backend.disconnectAccount(id);
       await reloadAccounts();
-      showToast('Account disconnected');
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     }
@@ -1383,7 +1564,6 @@ class MailController extends ChangeNotifier {
           notifyListeners();
         }
       }
-      showToast('Account removed');
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     }
@@ -1399,7 +1579,6 @@ class MailController extends ChangeNotifier {
   Future<void> runSecurityAction(String action, {String password = ''}) async {
     try {
       _security = await _backend.securityAction(action, password: password);
-      showToast('Vault updated');
       notifyListeners();
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
@@ -1461,7 +1640,6 @@ class MailController extends ChangeNotifier {
         settings,
         account: _activeAccount,
       );
-      showToast('AI settings saved');
       notifyListeners();
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
@@ -1471,7 +1649,6 @@ class MailController extends ChangeNotifier {
   Future<void> saveAiKey(String kind, String? key) async {
     try {
       _aiSettings = await _backend.aiPutKey(kind: kind, key: key);
-      showToast(key == null ? 'API key cleared' : 'API key saved');
       notifyListeners();
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
@@ -1592,7 +1769,6 @@ class MailController extends ChangeNotifier {
     try {
       final minted = await _backend.mintApiKey(input);
       await loadApiKeys();
-      showToast('API key created');
       return minted;
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
@@ -1604,7 +1780,6 @@ class MailController extends ChangeNotifier {
     try {
       await _backend.revokeApiKey(id);
       await loadApiKeys();
-      showToast('API key revoked');
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     }
@@ -1621,10 +1796,8 @@ class MailController extends ChangeNotifier {
     try {
       if (approve) {
         await _backend.approveSend(id);
-        showToast('Send request approved');
       } else {
         await _backend.rejectSend(id);
-        showToast('Send request rejected');
       }
       await loadSendRequests();
     } on MailBackendException catch (e) {
@@ -1640,8 +1813,26 @@ class MailController extends ChangeNotifier {
       timer.cancel();
     }
     _toastTimers.clear();
+    for (final pending in _pendingSends.values) {
+      pending.timer.cancel();
+    }
+    _pendingSends.clear();
     _eventSub?.cancel();
     _backend.dispose();
     super.dispose();
   }
+}
+
+class _PendingSend {
+  const _PendingSend({
+    required this.timer,
+    required this.account,
+    required this.input,
+    this.toastId,
+  });
+
+  final Timer timer;
+  final String account;
+  final DraftInput input;
+  final int? toastId;
 }

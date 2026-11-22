@@ -1,4 +1,4 @@
-set working-directory := '..'
+set working-directory := '../..'
 
 # Fetch locked Rust and Flutter dependencies.
 [default]

@@ -1,4 +1,5 @@
-import 'package:flutter/widgets.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:colecto/app.dart';
 import 'package:colecto/ui/core/theme/colecto_palette.dart';
@@ -130,6 +131,111 @@ void main() {
       final scaledSize = MediaQuery.sizeOf(innerCtx);
       expect(scaledSize.width, closeTo(1280 / 1.1, 1.0));
       expect(scaledSize.height, closeTo(800 / 1.1, 1.0));
+    });
+
+    testWidgets(
+      'Ctrl+ and Ctrl- zoom globally even while Settings is open, and toasts show on top',
+      (tester) async {
+        final c = await pumpColectoApp(
+          tester,
+          size: const Size(1280, 800),
+          design: ColectoPlatformStyle.desktop,
+        );
+        c.openSettings(SettingsSection.appearance);
+        await tester.pumpAndSettle();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.equal);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pumpAndSettle();
+        expect(c.zoom, closeTo(1.1, 0.01));
+        expect(find.text('Zoom 110%'), findsOneWidget);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.minus);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pumpAndSettle();
+        expect(c.zoom, closeTo(1.0, 0.01));
+      },
+    );
+
+    testWidgets(
+      'switching design from iOS to shadcn replaces CupertinoSheetRoute immediately and macOS switches cleanly',
+      (tester) async {
+        final c = await pumpColectoApp(
+          tester,
+          size: const Size(1280, 800),
+          design: ColectoPlatformStyle.ios,
+        );
+        c.openSettings(SettingsSection.appearance);
+        await tester.pumpAndSettle();
+
+        await c.setDesign(ColectoPlatformStyle.desktop);
+        await tester.pumpAndSettle();
+        expect(c.design, ColectoPlatformStyle.desktop);
+        expect(find.byType(CupertinoSheetTransition), findsNothing);
+        expect(tester.takeException(), isNull);
+
+        await c.setDesign(ColectoPlatformStyle.macos);
+        await tester.pumpAndSettle();
+        expect(c.design, ColectoPlatformStyle.macos);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'font picker shows grouped sections and design switch prompts when custom font is set',
+      (tester) async {
+        final c = await pumpColectoApp(
+          tester,
+          size: const Size(1280, 800),
+          design: ColectoPlatformStyle.desktop,
+        );
+        c.openSettings(SettingsSection.appearance);
+        await tester.pumpAndSettle();
+
+        // Open grouped font picker and verify sections.
+        await tester.tap(find.textContaining('Design default').first);
+        await tester.pumpAndSettle();
+        expect(find.text('THIS DESIGN'), findsOneWidget);
+        expect(find.text('BUNDLED FONTS'), findsOneWidget);
+        await tester.tap(find.text('Mona Sans').last);
+        await tester.pumpAndSettle();
+        expect(c.preferences.font, 'mona');
+
+        // Switching design with a custom font prompts to keep or reset.
+        await tester.ensureVisible(
+          find.textContaining(ColectoPlatformStyle.desktop.label).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.textContaining(ColectoPlatformStyle.desktop.label).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(ColectoPlatformStyle.fluent.label).last);
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Use ${ColectoPlatformStyle.fluent.label}’s default font?'),
+          findsOneWidget,
+        );
+        await tester.tap(find.text('Use default font'));
+        await tester.pumpAndSettle();
+        expect(c.design, ColectoPlatformStyle.fluent);
+        expect(c.preferences.font ?? '', isEmpty);
+      },
+    );
+
+    testWidgets('useless static Mail/Reader/Accounts tabs are removed', (
+      tester,
+    ) async {
+      await pumpColectoApp(
+        tester,
+        size: const Size(1280, 800),
+        design: ColectoPlatformStyle.desktop,
+      );
+      expect(find.text('Reader'), findsNothing);
+      expect(find.text('Accounts'), findsNothing);
+      expect(find.text('Mail'), findsNothing);
     });
   });
 }

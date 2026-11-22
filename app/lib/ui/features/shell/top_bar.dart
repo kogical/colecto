@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -34,13 +35,14 @@ class ColectoTopBar extends StatelessWidget {
       ColectoPlatformStyle.ios => (52.0, p.bg, true, 0.4, 480.0),
       ColectoPlatformStyle.desktop => (46.0, p.ground, true, 0.42, 520.0),
     };
+    // Reserve room for macOS traffic lights only when running natively on macOS.
+    final macTrafficLights =
+        !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.macOS &&
+        style == ColectoPlatformStyle.macos;
     return Container(
       height: height,
-      padding: EdgeInsets.only(
-        // macOS leaves room for the traffic lights.
-        left: style == ColectoPlatformStyle.macos ? 80 : 14,
-        right: 8,
-      ),
+      padding: EdgeInsets.only(left: macTrafficLights ? 80 : 14, right: 8),
       decoration: BoxDecoration(
         color: color,
         border: border
@@ -198,16 +200,26 @@ class _CommandTrigger extends StatelessWidget {
         32.0,
         4.0,
         p.ink.withValues(alpha: p.isDark ? 0.06 : 0.04),
-        'Search',
+        'Search mail or run a command',
       ),
       ColectoPlatformStyle.macos => (
         28.0,
         6.0,
         p.ink.withValues(alpha: 0.07),
-        'Search',
+        'Search mail or run a command',
       ),
-      ColectoPlatformStyle.android => (48.0, 28.0, p.raise, 'Search in mail'),
-      ColectoPlatformStyle.ios => (36.0, 10.0, p.control, 'Search'),
+      ColectoPlatformStyle.android => (
+        48.0,
+        28.0,
+        p.raise,
+        'Search mail or commands',
+      ),
+      ColectoPlatformStyle.ios => (
+        36.0,
+        10.0,
+        p.control,
+        'Search mail or commands',
+      ),
       ColectoPlatformStyle.desktop => (
         30.0,
         7.0,
@@ -216,6 +228,7 @@ class _CommandTrigger extends StatelessWidget {
       ),
     };
     final iconLeft = style != ColectoPlatformStyle.fluent;
+    final showShortcut = style.pointer;
     return ColectoPressable(
       onTap: onTap,
       pressScale: 0.99,
@@ -243,9 +256,8 @@ class _CommandTrigger extends StatelessWidget {
               ColectoPlatformStyle.desktop => Border.all(
                 color: s.hovered ? p.line : p.lineSoft,
               ),
-              // Fluent text boxes carry a stronger bottom edge.
-              ColectoPlatformStyle.fluent => Border(
-                bottom: BorderSide(color: p.ink3.withValues(alpha: 0.5)),
+              ColectoPlatformStyle.fluent => Border.all(
+                color: p.ink3.withValues(alpha: 0.35),
               ),
               _ => null,
             },
@@ -267,10 +279,11 @@ class _CommandTrigger extends StatelessWidget {
                   ),
                 ),
               ),
-              if (style == ColectoPlatformStyle.desktop) ...[
+              if (showShortcut) ...[
                 ColectoKbd(mod, raised: true),
                 const SizedBox(width: 3),
                 const ColectoKbd('K', raised: true),
+                if (!iconLeft) const SizedBox(width: 8),
               ],
               if (!iconLeft) icon,
             ],

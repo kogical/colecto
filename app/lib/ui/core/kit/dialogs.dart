@@ -7,6 +7,7 @@ Future<bool> showColectoConfirm({
   required String title,
   required String message,
   required String confirmLabel,
+  String cancelLabel = 'Cancel',
   bool danger = false,
 }) async {
   final style = colectoPlatformStyle(context);
@@ -20,7 +21,7 @@ Future<bool> showColectoConfirm({
           actions: [
             CupertinoDialogAction(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel'),
+              child: Text(cancelLabel),
             ),
             CupertinoDialogAction(
               isDestructiveAction: danger,
@@ -41,7 +42,7 @@ Future<bool> showColectoConfirm({
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel'),
+              child: Text(cancelLabel),
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
@@ -64,6 +65,7 @@ Future<bool> showColectoConfirm({
         title: title,
         message: message,
         confirmLabel: confirmLabel,
+        cancelLabel: cancelLabel,
         danger: danger,
         result: () => true,
       );
@@ -79,6 +81,7 @@ Future<T?> _showDesktopDialog<T>({
   String? message,
   Widget Function(BuildContext)? content,
   required String confirmLabel,
+  String cancelLabel = 'Cancel',
   bool danger = false,
   required T Function() result,
 }) {
@@ -109,7 +112,7 @@ Future<T?> _showDesktopDialog<T>({
               onPressed: () => Navigator.of(ctx).pop(result()),
             ),
             ColectoButton(
-              label: 'Cancel',
+              label: cancelLabel,
               onPressed: () => Navigator.of(ctx).pop(),
             ),
           ],
@@ -142,7 +145,7 @@ Future<T?> _showDesktopDialog<T>({
             controlSize: mac.ControlSize.large,
             secondary: true,
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
+            child: Text(cancelLabel),
           ),
         ),
       );
@@ -154,7 +157,7 @@ Future<T?> _showDesktopDialog<T>({
           description: message == null ? null : Text(message),
           actions: [
             ColectoButton(
-              label: 'Cancel',
+              label: cancelLabel,
               onPressed: () => Navigator.of(ctx).pop(),
             ),
             ColectoButton(
@@ -189,6 +192,7 @@ Future<T?> _showDesktopDialog<T>({
 Route<void> colectoModalRoute(
   BuildContext context, {
   required WidgetBuilder builder,
+  ColectoPlatformStyle? style,
   bool fullscreen = false,
   Size maxSize = const Size(1080, 780),
 
@@ -196,7 +200,7 @@ Route<void> colectoModalRoute(
   bool fitContent = false,
 }) {
   final p = ColectoPalette.of(context);
-  final style = colectoPlatformStyle(context);
+  final activeStyle = style ?? colectoPlatformStyle(context);
 
   Widget content(BuildContext ctx) => CallbackShortcuts(
     bindings: {
@@ -234,7 +238,7 @@ Route<void> colectoModalRoute(
     );
   }
 
-  switch (style) {
+  switch (activeStyle) {
     case ColectoPlatformStyle.ios:
       return CupertinoSheetRoute<void>(
         scrollableBuilder: (ctx, _) =>
@@ -313,7 +317,7 @@ Route<void> colectoModalRoute(
       );
     case ColectoPlatformStyle.macos:
       return _MacosSheetRoute(
-        barrierColor: p.bg.withValues(alpha: 0.6),
+        barrierColor: p.scrim,
         barrierLabel: 'Close',
         builder: (ctx) {
           final size = sized(ctx);
@@ -423,10 +427,10 @@ class _MacosSheetRoute extends PopupRoute<void> {
   bool get barrierDismissible => true;
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 450);
+  Duration get transitionDuration => ColectoMotion.card;
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 120);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 140);
 
   @override
   Widget buildPage(
@@ -447,22 +451,15 @@ class _MacosSheetRoute extends PopupRoute<void> {
     Widget child,
   ) {
     if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return child;
-    if (animation.status == AnimationStatus.reverse) {
-      return FadeTransition(
-        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutSine),
-        child: child,
-      );
-    }
-    return ScaleTransition(
-      scale: Tween(
-        begin: 0.9,
-        end: 1.0,
-      ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutBack)),
-      child: FadeTransition(
-        opacity: CurvedAnimation(
-          parent: animation,
-          curve: Curves.fastLinearToSlowEaseIn,
-        ),
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: ColectoMotion.easeOut,
+      reverseCurve: ColectoMotion.easeOut,
+    );
+    return FadeTransition(
+      opacity: curved,
+      child: ScaleTransition(
+        scale: Tween(begin: 0.96, end: 1.0).animate(curved),
         child: child,
       ),
     );

@@ -9,7 +9,6 @@ import '../../../domain/models/mail_models.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/widgets/colecto_mark.dart';
 import '../../core/kit/kit.dart';
-import '../../core/widgets/toast_overlay.dart';
 import '../composer/compose_requests.dart';
 import '../composer/composer_view.dart';
 import '../mailbox/message_list_pane.dart';
@@ -91,26 +90,6 @@ class _MailShellState extends State<MailShell> {
 
     if (mod && key == LogicalKeyboardKey.keyK) {
       _openCommandPalette();
-      return KeyEventResult.handled;
-    }
-    // Page zoom, as in a browser: Ctrl/Cmd +, - and 0.
-    if (mod &&
-        (key == LogicalKeyboardKey.equal ||
-            key == LogicalKeyboardKey.add ||
-            key == LogicalKeyboardKey.numpadAdd)) {
-      c.zoomIn();
-      return KeyEventResult.handled;
-    }
-    if (mod &&
-        (key == LogicalKeyboardKey.minus ||
-            key == LogicalKeyboardKey.numpadSubtract)) {
-      c.zoomOut();
-      return KeyEventResult.handled;
-    }
-    if (mod &&
-        (key == LogicalKeyboardKey.digit0 ||
-            key == LogicalKeyboardKey.numpad0)) {
-      c.resetZoom();
       return KeyEventResult.handled;
     }
     if (mod && key == LogicalKeyboardKey.comma) {
@@ -203,41 +182,24 @@ class _MailShellState extends State<MailShell> {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final width = constraints.maxWidth;
-              final toasts = ToastOverlay(
-                toasts: c.toasts,
-                position: c.preferences.notifications.position,
-                onDismiss: c.dismissToast,
-                onHold: c.holdToast,
-                topInset: width < 600 ? 8 : 56,
-              );
               if (width < 600) {
-                return Stack(
-                  children: [
-                    _PhoneShell(
-                      controller: c,
-                      searchFocus: _searchFocus,
-                      onCompose: _compose,
-                      onOpenDraft: _openDraft,
-                      onOpenCommandPalette: _openCommandPalette,
-                    ),
-                    toasts,
-                  ],
+                return _PhoneShell(
+                  controller: c,
+                  searchFocus: _searchFocus,
+                  onCompose: _compose,
+                  onOpenDraft: _openDraft,
+                  onOpenCommandPalette: _openCommandPalette,
                 );
               }
               return Material(
                 color: ColectoPalette.of(context).ground,
-                child: Stack(
-                  children: [
-                    _Workspace(
-                      controller: c,
-                      searchFocus: _searchFocus,
-                      compact: width <= 1050,
-                      onCompose: _compose,
-                      onOpenDraft: _openDraft,
-                      onOpenCommandPalette: _openCommandPalette,
-                    ),
-                    toasts,
-                  ],
+                child: _Workspace(
+                  controller: c,
+                  searchFocus: _searchFocus,
+                  compact: width <= 1050,
+                  onCompose: _compose,
+                  onOpenDraft: _openDraft,
+                  onOpenCommandPalette: _openCommandPalette,
                 ),
               );
             },
@@ -309,6 +271,7 @@ class _WorkspaceState extends State<_Workspace> {
     design: c.design,
     build: () => colectoModalRoute(
       context,
+      style: c.design,
       builder: (_) => ListenableBuilder(
         listenable: c,
         builder: (_, _) => SettingsView(controller: c),
@@ -338,28 +301,25 @@ class _WorkspaceState extends State<_Workspace> {
                 children: [
                   SizedBox(
                     width: listWidth,
-                    child: ColoredBox(
-                      color: p.bg,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const _PaneHeader(
-                            children: [
-                              _PaneTab(icon: LucideIcons.inbox, label: 'Mail'),
-                            ],
-                          ),
-                          Expanded(
-                            child: MessageListPane(
-                              controller: c,
-                              searchFocusNode: widget.searchFocus,
-                              onOpenDraft: widget.onOpenDraft,
-                              onThreadSelected: c.selectThread,
-                              onCompose: compose,
-                              folderTabs: true,
+                    child: RepaintBoundary(
+                      child: ColoredBox(
+                        color: p.bg,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: MessageListPane(
+                                controller: c,
+                                searchFocusNode: widget.searchFocus,
+                                onOpenDraft: widget.onOpenDraft,
+                                onThreadSelected: c.selectThread,
+                                onCompose: compose,
+                                folderTabs: true,
+                              ),
                             ),
-                          ),
-                          _AccountsBar(controller: c),
-                        ],
+                            _AccountsBar(controller: c),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -370,14 +330,16 @@ class _WorkspaceState extends State<_Workspace> {
                     onReset: () => setState(() => _listWidth = null),
                   ),
                   Expanded(
-                    child: ColoredBox(
-                      color: p.bg,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _ReaderHeader(controller: c),
-                          Expanded(child: _reader()),
-                        ],
+                    child: RepaintBoundary(
+                      child: ColoredBox(
+                        color: p.bg,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _ReaderHeader(controller: c),
+                            Expanded(child: _reader()),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -413,30 +375,19 @@ class _AccountsBar extends StatelessWidget {
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: p.lineSoft)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const _PaneHeader(
-            border: false,
-            children: [_PaneTab(icon: LucideIcons.atSign, label: 'Accounts')],
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(6, 2, 6, 6),
-            child: AccountSwitcher(controller: controller, expand: true),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: AccountSwitcher(controller: controller, expand: true),
       ),
     );
   }
 }
 
-/// A pane's head, as in Colecto's workspace: the pane's own tab, then any
-/// tabs it holds (open messages in the reader).
+/// The reader's tab strip for open conversations. Hidden when no tabs are open.
 class _PaneHeader extends StatelessWidget {
-  const _PaneHeader({required this.children, this.border = true});
+  const _PaneHeader({required this.children});
 
   final List<Widget> children;
-  final bool border;
 
   @override
   Widget build(BuildContext context) {
@@ -444,11 +395,9 @@ class _PaneHeader extends StatelessWidget {
     return Container(
       height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: border
-          ? BoxDecoration(
-              border: Border(bottom: BorderSide(color: p.lineSoft)),
-            )
-          : null,
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: p.lineSoft)),
+      ),
       child: ScrollConfiguration(
         behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
         child: ListView(scrollDirection: Axis.horizontal, children: children),
@@ -457,36 +406,8 @@ class _PaneHeader extends StatelessWidget {
   }
 }
 
-/// A pane's own tab: its icon and name over an accent underline.
-class _PaneTab extends StatelessWidget {
-  const _PaneTab({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = ColectoPalette.of(context);
-    return Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: p.accent, width: 2)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: p.ink2),
-          const SizedBox(width: 6),
-          Text(label, style: kStyle(13, weight: 600, color: p.ink)),
-        ],
-      ),
-    );
-  }
-}
-
-/// The reader's head: its tab, then a tab per open message. Selecting one
-/// shows it; × (or a middle click) closes it; right-click offers Close all.
+/// The reader's head: one tab per open message. Selecting one shows it;
+/// × (or a middle click) closes it; right-click offers Close all.
 class _ReaderHeader extends StatelessWidget {
   const _ReaderHeader({required this.controller});
 
@@ -495,10 +416,10 @@ class _ReaderHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = controller;
+    if (c.openTabs.isEmpty) return const SizedBox.shrink();
     final active = c.compose == null ? c.activeTabId : null;
     return _PaneHeader(
       children: [
-        const _PaneTab(icon: LucideIcons.bookOpen, label: 'Reader'),
         for (final t in c.openTabs)
           _MessageTab(
             label: t.subject.trim().isEmpty ? '(No subject)' : t.subject,
@@ -918,6 +839,7 @@ class _PhoneShellState extends State<_PhoneShell> {
       design: c.design,
       build: () => colectoModalRoute(
         context,
+        style: c.design,
         fullscreen: true,
         builder: (_) => ListenableBuilder(
           listenable: c,
@@ -944,7 +866,7 @@ class _PhoneShellState extends State<_PhoneShell> {
       items: [
         for (final f in c.folders.where((f) => !_tabs.contains(f)))
           ColectoMenuItem(
-            label: f.name,
+            label: folderDisplayName(f),
             icon: folderIcon(f.role),
             checked: f.id == c.activeFolder,
             onSelected: () => c.selectFolder(f.id),
@@ -1084,7 +1006,8 @@ class _PhoneShellState extends State<_PhoneShell> {
     );
 
     final destinations = [
-      for (final f in tabs) (folderIcon(f.role), f.name, f.unread),
+      for (final f in tabs)
+        (folderIcon(f.role), folderDisplayName(f), f.unread),
       (LucideIcons.ellipsis, 'More', c.pendingApprovalCount),
     ];
 

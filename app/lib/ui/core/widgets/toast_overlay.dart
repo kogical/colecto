@@ -113,20 +113,23 @@ class _ToastOverlayState extends State<ToastOverlay> {
     ];
     return Align(
       alignment: _alignment,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16 + pad.left,
-          top ? widget.topInset + pad.top : 16,
-          16 + pad.right,
-          16 + pad.bottom,
-        ),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            // Newest sits nearest the edge it is docked to.
-            children: top ? items.reversed.toList() : items,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            16 + pad.left,
+            top ? widget.topInset + pad.top : 16,
+            16 + pad.right,
+            16 + pad.bottom,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              // Newest sits nearest the edge it is docked to.
+              children: top ? items.reversed.toList() : items,
+            ),
           ),
         ),
       ),
@@ -289,12 +292,15 @@ class _ToastCardState extends State<_ToastCard>
                         ),
                       ),
                       const SizedBox(width: 6),
-                      ColectoIconButton(
-                        icon: LucideIcons.x,
-                        tooltip: 'Dismiss',
-                        size: 14,
-                        dimension: 24,
-                        onPressed: widget.onDismiss,
+                      Semantics(
+                        label: 'Dismiss',
+                        button: true,
+                        child: ColectoIconButton(
+                          icon: LucideIcons.x,
+                          size: 14,
+                          dimension: 24,
+                          onPressed: widget.onDismiss,
+                        ),
                       ),
                     ],
                   ),

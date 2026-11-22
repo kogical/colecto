@@ -1112,6 +1112,8 @@ mod tests {
         assert_eq!(folders[0].role, FolderRole::Sent);
         assert_eq!((folders[0].total, folders[0].unread), (12, 3));
         assert_eq!(folders[1].role, FolderRole::Inbox);
+        assert_eq!(folders[1].id, "inbox");
+        assert_eq!(folders[1].name, "Inbox");
         assert_eq!((folders[1].total, folders[1].unread), (20, 7));
         server.join().unwrap();
     }
@@ -1820,9 +1822,18 @@ fn folders_session<T: std::io::Read + std::io::Write>(
                 }
             }
         }
+        let is_inbox = name.name().eq_ignore_ascii_case("INBOX");
         folders.push(Folder {
-            id: name.name().into(),
-            name: name.name().into(),
+            id: if is_inbox {
+                "inbox".into()
+            } else {
+                name.name().into()
+            },
+            name: if is_inbox {
+                "Inbox".into()
+            } else {
+                name.name().into()
+            },
             role: folder_role(name.name(), &attributes),
             unread: unread.ok_or_else(|| remote("Missing UNSEEN"))?,
             total: total.ok_or_else(|| remote("Missing MESSAGES"))?,

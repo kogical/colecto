@@ -136,7 +136,7 @@ class _MessageListPaneState extends State<MessageListPane> {
   @override
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
-    final isDrafts = c.activeFolder == 'drafts' && c.activeLabel == null;
+    final isDrafts = c.isDraftsActive && c.activeLabel == null;
     final touch = colectoTouch(context);
 
     Widget list = CustomScrollView(
@@ -379,7 +379,7 @@ class _MessageListPaneState extends State<MessageListPane> {
                 : 'Nothing in ${c.currentFolderName}',
             body: searching
                 ? 'Try fewer words, or search another folder.'
-                : c.activeFolder == 'inbox' && c.activeLabel == null
+                : c.isInboxActive && c.activeLabel == null
                 ? 'You’re all caught up.'
                 : 'Messages you move here will show up in this list.',
             action: searching
@@ -761,13 +761,10 @@ class _MessageListPaneState extends State<MessageListPane> {
               style: kStyle(12, color: sync?.error != null ? p.danger : p.ink3),
             ),
           ),
-          const SizedBox(width: 2),
-          ColectoIconButton(
-            icon: LucideIcons.refreshCw,
-            tooltip: 'Check for new mail',
-            size: 14,
-            dimension: 28,
-            onPressed: c.refreshing ? null : () => c.loadMailbox(refresh: true),
+          const SizedBox(width: 8),
+          _SpinningRefreshButton(
+            syncing: syncing,
+            onPressed: () => c.loadMailbox(refresh: true),
           ),
         ],
       ),
@@ -1601,16 +1598,19 @@ class _FolderTabs extends StatelessWidget {
           for (final f in [...tabs, ?open])
             _FolderTab(
               icon: folderIcon(f.role),
-              label: f.name,
+              label: folderDisplayName(f),
               count: f.unread > 0
                   ? f.unread
                   : (f.role == FolderRole.drafts ? f.total : 0),
-              selected: f.id == c.activeFolder && c.activeLabel == null,
+              selected:
+                  (f.id == c.activeFolder ||
+                      (c.isInboxActive && f.role == FolderRole.inbox)) &&
+                  c.activeLabel == null,
               onTap: () => c.selectFolder(f.id),
               onMenu: (pos) => showColectoContextMenu(
                 context: context,
                 globalPosition: pos,
-                title: f.name,
+                title: folderDisplayName(f),
                 items: [
                   ColectoMenuItem(
                     label: 'Check for new mail',
@@ -1634,7 +1634,7 @@ class _FolderTabs extends StatelessWidget {
                 final items = [
                   for (final f in rest)
                     ColectoMenuItem(
-                      label: f.name,
+                      label: folderDisplayName(f),
                       icon: folderIcon(f.role),
                       checked: f.id == c.activeFolder,
                       onSelected: () => c.selectFolder(f.id),
@@ -1743,6 +1743,100 @@ class _FolderTab extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Footer refresh button that rotates smoothly while syncing, with no harsh
+/// disabled background fill.
+class _SpinningRefreshButton extends StatefulWidget {
+  const _SpinningRefreshButton({
+    required this.syncing,
+    required this.onPressed,
+  });
+
+  final bool syncing;
+  final VoidCallback onPressed;
+
+  @override
+  State<_SpinningRefreshButton> createState() => _SpinningRefreshButtonState();
+}
+
+class _SpinningRefreshButtonState extends State<_SpinningRefreshButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.syncing) _spin.repeat();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateSpin();
+  }
+
+  @override
+  void didUpdateWidget(_SpinningRefreshButton old) {
+    super.didUpdateWidget(old);
+    if (widget.syncing != old.syncing) _updateSpin();
+  }
+
+  void _updateSpin() {
+    final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (widget.syncing && !reduce) {
+      if (!_spin.isAnimating) _spin.repeat();
+    } else if (_spin.isAnimating) {
+      // Finish the current turn smoothly rather than snapping back to 0.
+      _spin.forward().then((_) {
+        if (mounted && !widget.syncing) _spin.reset();
+      });
+    } else {
+      _spin.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = ColectoPalette.of(context);
+    return RepaintBoundary(
+      child: ColectoPressable(
+        onTap: widget.syncing ? null : widget.onPressed,
+        tooltip: widget.syncing ? 'Syncing…' : 'Check for new mail',
+        semanticLabel: 'Check for new mail',
+        focusRadius: colectoRadius(context),
+        builder: (context, s) => AnimatedContainer(
+          duration: ColectoMotion.hover,
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: s.hovered && !widget.syncing
+                ? p.raise
+                : const Color(0x00000000),
+            borderRadius: BorderRadius.circular(colectoRadius(context)),
+          ),
+          child: RotationTransition(
+            turns: _spin,
+            child: Icon(
+              LucideIcons.refreshCw,
+              size: 14,
+              color: widget.syncing ? p.accent : (s.hovered ? p.ink : p.ink2),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

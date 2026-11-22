@@ -19,6 +19,7 @@ import '../../../domain/models/preferences_models.dart';
 import '../../../domain/models/service_event.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/widgets/toast_overlay.dart';
+import 'folders.dart';
 
 enum SettingsSection {
   accounts('accounts', 'Accounts', LucideIcons.atSign),
@@ -128,8 +129,11 @@ class MailController extends ChangeNotifier {
   bool _disposed = false;
   int _mailboxEpoch = 0;
   int _threadEpoch = 0;
+  int _reloadEpoch = 0;
   int _toastSeq = 0;
   final Map<int, Timer> _toastTimers = {};
+
+  int get reloadEpoch => _reloadEpoch;
 
   @override
   void notifyListeners() {
@@ -194,11 +198,13 @@ class MailController extends ChangeNotifier {
   String? _selectedMessageId;
   List<ThreadMessage> _conversation = const [];
   final Map<String, MessageContent> _contentCache = {};
+  static const int _maxContentCache = 40;
   final Set<String> _loadingContentIds = {};
 
   // AI & Automation state
   AiSettingsView _aiSettings = const AiSettingsView();
   final Map<String, String> _summaries = {};
+  static const int _maxSummariesCache = 100;
   final Set<String> _loadingSummaryIds = {};
   List<ApiKeyMetadata> _apiKeys = const [];
   List<PendingSend> _sendRequests = const [];
@@ -224,14 +230,39 @@ class MailController extends ChangeNotifier {
       ColectoPlatformStyle.parse(colectoDesignDefine) != null;
 
   /// Saves [design] as the owner's choice; the platform's own design is
-  /// stored as no choice, so it keeps following the platform.
-  Future<void> setDesign(ColectoPlatformStyle design) async {
+  /// stored as no choice, so it keeps following the platform. When
+  /// [resetFont] is true, clears any custom font so the new design's default
+  /// takes effect.
+  Future<void> setDesign(
+    ColectoPlatformStyle design, {
+    bool resetFont = false,
+  }) async {
     _sessionDesign = null;
     await updatePreferences(
       PreferencesPatch(
         design: design == ColectoPlatformStyle.native() ? '' : design.id,
+        font: resetFont ? '' : null,
       ),
     );
+  }
+
+  /// Reloads the Flutter app state and re-fetches preferences, accounts,
+  /// folders, and mail from the active backend without restarting the process.
+  Future<void> reloadApp() async {
+    _reloadEpoch++;
+    _activeSettings = null;
+    _compose = null;
+    _selectedMessageId = null;
+    _conversation = const [];
+    _contentCache.clear();
+    _loadingContentIds.clear();
+    _summaries.clear();
+    _loadingSummaryIds.clear();
+    _bulkSelectedIds.clear();
+    _sortedThreadsCache = null;
+    notifyListeners();
+    await initialize();
+    showToast('App reloaded');
   }
 
   /// Browser-like zoom steps, in percent.
@@ -339,14 +370,34 @@ class MailController extends ChangeNotifier {
   ComposeRequest? get compose => _compose;
   int get composeKey => _composeKey;
 
+  bool get isInboxActive {
+    if (_activeFolder.toLowerCase() == 'inbox') return true;
+    for (final f in _folders) {
+      if (f.id == _activeFolder) return f.role == FolderRole.inbox;
+    }
+    return false;
+  }
+
+  bool get isDraftsActive {
+    if (_activeFolder.toLowerCase() == 'drafts') return true;
+    for (final f in _folders) {
+      if (f.id == _activeFolder) return f.role == FolderRole.drafts;
+    }
+    return false;
+  }
+
   String get currentFolderName {
     if (_activeLabel != null) return _activeLabel!;
     for (final f in _folders) {
-      if (f.id == _activeFolder) return f.name;
+      if (f.id == _activeFolder ||
+          (isInboxActive && f.role == FolderRole.inbox)) {
+        return folderDisplayName(f);
+      }
     }
-    return _activeFolder.isEmpty
-        ? 'Inbox'
-        : '${_activeFolder[0].toUpperCase()}${_activeFolder.substring(1)}';
+    if (_activeFolder.isEmpty || _activeFolder.toUpperCase() == 'INBOX') {
+      return 'Inbox';
+    }
+    return '${_activeFolder[0].toUpperCase()}${_activeFolder.substring(1)}';
   }
 
   void startCompose([ComposeRequest request = const ComposeRequest()]) {
@@ -392,26 +443,39 @@ class MailController extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   List<MailMessage> get messages => _messages;
   ThreadSort _sort = ThreadSort.newest;
+  List<ConversationThread>? _sortedThreadsCache;
   ThreadSort get sort => _sort;
   void setSort(ThreadSort sort) {
     if (_sort == sort) return;
     _sort = sort;
+    _sortedThreadsCache = null;
     notifyListeners();
   }
 
-  /// The conversations in the list, in the chosen order.
+  void _setThreads(List<ConversationThread> threads) {
+    _threads = threads;
+    _sortedThreadsCache = null;
+  }
+
+  /// The conversations in the list, in the chosen order (cached until
+  /// threads or sort order changes).
   List<ConversationThread> get threads {
+    if (_sort == ThreadSort.newest) return _threads;
+    final cached = _sortedThreadsCache;
+    if (cached != null) return cached;
     String key(ConversationThread t) => switch (_sort) {
       ThreadSort.sender => t.latest.displaySender,
       _ => t.subject,
     }.toLowerCase();
-    return switch (_sort) {
+    final sorted = switch (_sort) {
       ThreadSort.newest => _threads,
       ThreadSort.oldest => _threads.reversed.toList(growable: false),
       ThreadSort.sender || ThreadSort.subject => [
         ..._threads,
       ]..sort((a, b) => key(a).compareTo(key(b))),
     };
+    _sortedThreadsCache = sorted;
+    return sorted;
   }
 
   List<Draft> get drafts => _drafts;
@@ -757,7 +821,7 @@ class MailController extends ChangeNotifier {
 
   Future<void> selectFolder(String folderId) async {
     _activeSettings = null;
-    _activeFolder = folderId;
+    _activeFolder = folderId.toLowerCase() == 'inbox' ? 'inbox' : folderId;
     _activeLabel = null;
     _selectedMessageId = null;
     _conversation = const [];
@@ -832,19 +896,22 @@ class MailController extends ChangeNotifier {
       final labels = await _backend.labels(account);
       if (epoch != _mailboxEpoch) return;
 
-      if (folder == 'drafts' && label == null) {
+      final isDrafts =
+          folder.toLowerCase() == 'drafts' ||
+          folders.any((f) => f.id == folder && f.role == FolderRole.drafts);
+      if (isDrafts && label == null) {
         final drafts = await _backend.drafts(account);
         if (epoch != _mailboxEpoch) return;
         _folders = folders;
         _labels = labels;
         _drafts = drafts;
         _messages = const [];
-        _threads = const [];
+        _setThreads(const []);
         _nextOffset = 0;
         _hasMore = false;
       } else {
         final List<MailMessage> messages;
-        if (refresh) {
+        if (refresh || query.isNotEmpty) {
           messages = await _backend.refreshMessages(
             account,
             folder: folder,
@@ -858,7 +925,22 @@ class MailController extends ChangeNotifier {
             query: query,
             limit: limit,
           );
-          messages = snap.messages;
+          // If no cached snapshot exists yet for a connected non-demo account
+          // (e.g. first load of Gmail Inbox or opening another folder), fetch
+          // from the provider immediately instead of showing an empty list.
+          if (snap.messages.isEmpty &&
+              snap.fetchedAt == null &&
+              account != 'demo' &&
+              (currentAccountInfo?.connected ?? false)) {
+            messages = await _backend.refreshMessages(
+              account,
+              folder: folder,
+              query: query,
+              limit: limit,
+            );
+          } else {
+            messages = snap.messages;
+          }
         }
         if (epoch != _mailboxEpoch) return;
         _folders = folders;
@@ -876,7 +958,7 @@ class MailController extends ChangeNotifier {
               .where((m) => allowed.contains(m.id))
               .toList(growable: false);
         }
-        _threads = groupConversations(visible);
+        _setThreads(groupConversations(visible));
       }
       _syncedAt = DateTime.now();
       await _loadSyncStatus();
@@ -929,7 +1011,7 @@ class MailController extends ChangeNotifier {
       _nextOffset = offset + page.length;
       if (fresh.isNotEmpty) {
         _messages = [..._messages, ...fresh];
-        _threads = groupConversations(_messages);
+        _setThreads(groupConversations(_messages));
       }
       _hasMore = page.length >= limit && _nextOffset < maxListOffset;
     } on MailBackendException catch (e) {
@@ -1073,7 +1155,11 @@ class MailController extends ChangeNotifier {
         remoteImages: remoteImages,
       );
       if (account != _activeAccount) return;
+      _contentCache.remove(messageId);
       _contentCache[messageId] = content;
+      while (_contentCache.length > _maxContentCache) {
+        _contentCache.remove(_contentCache.keys.first);
+      }
     } on MailBackendException catch (e) {
       if (account == _activeAccount) showToast(e.message, isError: true);
     } finally {
@@ -1429,7 +1515,11 @@ class MailController extends ChangeNotifier {
     try {
       final summary = await _backend.aiGetSummary(_activeAccount, messageId);
       if (summary != null && summary.isNotEmpty) {
+        _summaries.remove(messageId);
         _summaries[messageId] = summary;
+        while (_summaries.length > _maxSummariesCache) {
+          _summaries.remove(_summaries.keys.first);
+        }
         notifyListeners();
       }
     } catch (_) {}
@@ -1440,7 +1530,11 @@ class MailController extends ChangeNotifier {
     notifyListeners();
     try {
       final summary = await _backend.aiCreateSummary(_activeAccount, messageId);
+      _summaries.remove(messageId);
       _summaries[messageId] = summary;
+      while (_summaries.length > _maxSummariesCache) {
+        _summaries.remove(_summaries.keys.first);
+      }
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     } finally {

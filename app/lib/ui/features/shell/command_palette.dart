@@ -143,11 +143,11 @@ class _CommandPaletteState extends State<_CommandPalette> {
         ),
       for (final folder in c.folders)
         _Command(
-          title: folder.name,
+          title: folderDisplayName(folder),
           group: 'Go to',
           icon: folderIcon(folder.role),
           hint: folder.unread > 0 ? '${folder.unread} unread' : null,
-          keywords: 'folder mailbox open',
+          keywords: 'folder mailbox open ${folder.name}',
           onRun: () => c.selectFolder(folder.id),
         ),
       for (final label in c.labels.keys)
@@ -192,6 +192,13 @@ class _CommandPaletteState extends State<_CommandPalette> {
           ThemeMode.light => ThemeMode.system,
           ThemeMode.system => ThemeMode.dark,
         }),
+      ),
+      _Command(
+        title: 'Reload app',
+        group: 'App',
+        icon: LucideIcons.rotateCcw,
+        keywords: 'reload restart refresh reset app ui',
+        onRun: () => c.reloadApp(),
       ),
     ];
 

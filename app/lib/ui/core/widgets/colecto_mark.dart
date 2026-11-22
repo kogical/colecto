@@ -17,7 +17,9 @@ class ColectoMark extends StatelessWidget {
       label: 'Colecto',
       child: SizedBox.square(
         dimension: size,
-        child: const CustomPaint(painter: _MarkPainter()),
+        child: const RepaintBoundary(
+          child: CustomPaint(painter: _MarkPainter()),
+        ),
       ),
     );
   }
@@ -31,107 +33,99 @@ class _MarkPainter extends CustomPainter {
   static const _planeLight = Color(0xFFE7EDE8);
   static const _planeShade = Color(0xFFB7C6BB);
 
+  static final _tileRect = RRect.fromLTRBR(
+    6,
+    6,
+    114,
+    114,
+    const Radius.circular(28),
+  );
+  static final _tilePaint = Paint()..color = _tile;
+  static final _mintArcPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = 10
+    ..color = _mint;
+  static final _cutoutArcPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = 14.4
+    ..color = _tile;
+  static final _planeOutlineStroke = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 6.8
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..color = _tile;
+  static final _lightWingFill = Paint()..color = _planeLight;
+  static final _lightWingStroke = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 2.4
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..color = _planeLight;
+  static final _shadeWingFill = Paint()..color = _planeShade;
+  static final _shadeWingStroke = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 2.4
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..color = _planeShade;
+
+  static final _topArc = Path()
+    ..moveTo(84, 36)
+    ..arcToPoint(
+      const Offset(36, 36),
+      radius: const Radius.circular(34),
+      largeArc: false,
+      clockwise: false,
+    );
+  static final _planeOutline = Path()
+    ..moveTo(100, 30)
+    ..lineTo(26.4, 54.5)
+    ..lineTo(54.8, 63.8)
+    ..lineTo(55.8, 93.7)
+    ..close();
+  static final _lightWing = Path()
+    ..moveTo(100, 30)
+    ..lineTo(26.4, 54.5)
+    ..lineTo(54.8, 63.8)
+    ..close();
+  static final _shadeWing = Path()
+    ..moveTo(100, 30)
+    ..lineTo(55.8, 93.7)
+    ..lineTo(54.8, 63.8)
+    ..close();
+  static final _cutoutArc = Path()
+    ..moveTo(40.5, 32.1)
+    ..arcToPoint(
+      const Offset(84, 84),
+      radius: const Radius.circular(34),
+      largeArc: true,
+      clockwise: false,
+    );
+  static final _frontArc = Path()
+    ..moveTo(46.7, 28.7)
+    ..arcToPoint(
+      const Offset(84, 84),
+      radius: const Radius.circular(34),
+      largeArc: true,
+      clockwise: false,
+    );
+
   @override
   void paint(Canvas canvas, Size size) {
     canvas.scale(size.width / 120);
-    // <rect x="6" y="6" width="108" height="108" rx="28" fill="#1C211E" />
-    canvas.drawRRect(
-      RRect.fromLTRBR(6, 6, 114, 114, const Radius.circular(28)),
-      Paint()..color = _tile,
-    );
-
-    final arcPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    // Top arc behind the plane: M84 36A34 34 0 0 0 36 36
-    final topArc = Path()
-      ..moveTo(84, 36)
-      ..arcToPoint(
-        const Offset(36, 36),
-        radius: const Radius.circular(34),
-        largeArc: false,
-        clockwise: false,
-      );
-    canvas.drawPath(
-      topArc,
-      arcPaint
-        ..strokeWidth = 10
-        ..color = _mint,
-    );
-
-    // Paper plane: knockout outline, light upper wing, shaded lower wing.
-    final planeOutline = Path()
-      ..moveTo(100, 30)
-      ..lineTo(26.4, 54.5)
-      ..lineTo(54.8, 63.8)
-      ..lineTo(55.8, 93.7)
-      ..close();
-    _fillAndStroke(canvas, planeOutline, _tile, 6.8);
-
-    final lightWing = Path()
-      ..moveTo(100, 30)
-      ..lineTo(26.4, 54.5)
-      ..lineTo(54.8, 63.8)
-      ..close();
-    _fillAndStroke(canvas, lightWing, _planeLight, 2.4);
-
-    final shadeWing = Path()
-      ..moveTo(100, 30)
-      ..lineTo(55.8, 93.7)
-      ..lineTo(54.8, 63.8)
-      ..close();
-    _fillAndStroke(canvas, shadeWing, _planeShade, 2.4);
-
-    // Foreground C cutout: M40.5 32.1A34 34 0 1 0 84 84
-    final cutoutArc = Path()
-      ..moveTo(40.5, 32.1)
-      ..arcToPoint(
-        const Offset(84, 84),
-        radius: const Radius.circular(34),
-        largeArc: true,
-        clockwise: false,
-      );
-    canvas.drawPath(
-      cutoutArc,
-      arcPaint
-        ..strokeWidth = 14.4
-        ..color = _tile,
-    );
-
-    // Foreground C stroke: M46.7 28.7A34 34 0 1 0 84 84
-    final frontArc = Path()
-      ..moveTo(46.7, 28.7)
-      ..arcToPoint(
-        const Offset(84, 84),
-        radius: const Radius.circular(34),
-        largeArc: true,
-        clockwise: false,
-      );
-    canvas.drawPath(
-      frontArc,
-      arcPaint
-        ..strokeWidth = 10
-        ..color = _mint,
-    );
-  }
-
-  static void _fillAndStroke(
-    Canvas canvas,
-    Path path,
-    Color color,
-    double strokeWidth,
-  ) {
-    canvas.drawPath(path, Paint()..color = color);
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..color = color,
-    );
+    canvas.drawRRect(_tileRect, _tilePaint);
+    canvas.drawPath(_topArc, _mintArcPaint);
+    canvas.drawPath(_planeOutline, _tilePaint);
+    canvas.drawPath(_planeOutline, _planeOutlineStroke);
+    canvas.drawPath(_lightWing, _lightWingFill);
+    canvas.drawPath(_lightWing, _lightWingStroke);
+    canvas.drawPath(_shadeWing, _shadeWingFill);
+    canvas.drawPath(_shadeWing, _shadeWingStroke);
+    canvas.drawPath(_cutoutArc, _cutoutArcPaint);
+    canvas.drawPath(_frontArc, _mintArcPaint);
   }
 
   @override
@@ -149,6 +143,7 @@ class ColectoBrand extends StatelessWidget {
     final p = ColectoPalette.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         ColectoMark(size: markSize),
         const SizedBox(width: 8),
@@ -159,6 +154,7 @@ class ColectoBrand extends StatelessWidget {
             weight: 660,
             width: 108,
             color: p.ink,
+            height: 1.0,
             letterSpacing: -0.2,
           ),
         ),

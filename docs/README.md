@@ -36,7 +36,7 @@ Start with the page that matches what you want to do:
 | In-process desktop/mobile bridge | `colecto-ffi` (`cdylib`/`staticlib`, called via `dart:ffi`, zero loopback ports) |
 | Automation | MCP server (`rmcp`), scoped API keys with send approval |
 | Interface | Flutter (Dart), Colecto kit mapping onto `shadcn_ui`, `fluent_ui`, `macos_ui`, Material 3, and Cupertino |
-| Tasks | `just` (recipes in `just/`) |
+| Tasks | `just` (recipes in `scripts/just/`) |
 | Packaging | GitHub Actions releases, Docker image `ghcr.io/kogical/colectod`, AUR packages |
 
 ## Where things are
@@ -48,7 +48,7 @@ Start with the page that matches what you want to do:
 | `crates/colecto-daemon/` | Standalone HTTP/SSE/MCP daemon (`colecto-daemon`) and stdio MCP broker (`colecto-mcp`) |
 | `crates/colecto-ffi/` | Thin C-ABI FFI facade (`libcolecto_ffi`) exposing `MailService` and events to Flutter in-process |
 | `app/` | Flutter multi-platform UI (Linux, Windows, macOS, Android, iOS, Web) |
-| `just/` | `just` modules: `install`, `build`, `check`, `test`, `run` |
+| `scripts/just/` | `just` modules: `install`, `build`, `check`, `test`, `run` |
 | `packaging/` | Linux desktop entry, systemd unit, Docker Compose, AUR PKGBUILDs |
 | `.github/workflows/` | CI (`ci.yml`), cache pruning (`prune-caches.yml`), and releases (`release.yml`) |
 | `.github/release-notes/` | Release notes used when a `vX.Y.Z` tag is published; `pending.md` collects notes for the next release |

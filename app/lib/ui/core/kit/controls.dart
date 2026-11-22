@@ -485,9 +485,9 @@ class ColectoSelect<T> extends StatelessWidget {
             padding: EdgeInsets.zero,
             onPressed: onChanged == null
                 ? null
-                : () => showColectoContextMenu(
+                : () => showColectoModalPicker(
                     context: ctx,
-                    globalPosition: colectoRectOf(ctx).center,
+                    title: 'Choose',
                     items: [
                       for (final o in options)
                         ColectoMenuItem(

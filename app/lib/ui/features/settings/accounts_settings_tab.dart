@@ -128,7 +128,8 @@ class _AccountsSettingsTabState extends State<AccountsSettingsTab> {
         ColectoSection(
           title: 'Mail accounts',
           children: [
-            for (final a in c.accounts) _row(context, a),
+            for (var i = 0; i < c.accounts.length; i++)
+              _row(context, c.accounts[i], index: i, total: c.accounts.length),
             const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerLeft,
@@ -330,34 +331,54 @@ class _AccountsSettingsTabState extends State<AccountsSettingsTab> {
     ];
   }
 
-  Widget _row(BuildContext context, AccountInfo a) {
+  Widget _row(
+    BuildContext context,
+    AccountInfo a, {
+    required int index,
+    required int total,
+  }) {
     final p = ColectoPalette.of(context);
     final on = c.preferences.accountEnabled(a.id);
     final state = _status(a);
     final real = a.id != 'demo' && a.settings != null;
     final busy = _working || c.security.locked;
     final narrow = MediaQuery.sizeOf(context).width < 600;
-    final actions = real
-        ? [
-            ColectoMenuItem(
-              label: a.configured ? 'Reconnect' : 'Sign in again',
-              icon: LucideIcons.refreshCw,
-              onSelected: () => _reconnect(a),
-            ),
-            ColectoMenuItem(
-              label: 'Edit',
-              icon: LucideIcons.pencil,
-              onSelected: () => showAccountWizard(context, c, account: a),
-            ),
-            const ColectoMenuItem.divider(),
-            ColectoMenuItem(
-              label: 'Remove…',
-              icon: LucideIcons.trash2,
-              danger: true,
-              onSelected: () => _remove(a),
-            ),
-          ]
-        : const <ColectoMenuItem>[];
+    final canMoveUp = index > 0;
+    final canMoveDown = index < total - 1;
+    final actions = [
+      if (canMoveUp)
+        ColectoMenuItem(
+          label: 'Move up',
+          icon: LucideIcons.arrowUp,
+          onSelected: () => c.reorderAccounts(index, index - 1),
+        ),
+      if (canMoveDown)
+        ColectoMenuItem(
+          label: 'Move down',
+          icon: LucideIcons.arrowDown,
+          onSelected: () => c.reorderAccounts(index, index + 2),
+        ),
+      if (real && (canMoveUp || canMoveDown)) const ColectoMenuItem.divider(),
+      if (real) ...[
+        ColectoMenuItem(
+          label: a.configured ? 'Reconnect' : 'Sign in again',
+          icon: LucideIcons.refreshCw,
+          onSelected: () => _reconnect(a),
+        ),
+        ColectoMenuItem(
+          label: 'Edit',
+          icon: LucideIcons.pencil,
+          onSelected: () => showAccountWizard(context, c, account: a),
+        ),
+        const ColectoMenuItem.divider(),
+        ColectoMenuItem(
+          label: 'Remove…',
+          icon: LucideIcons.trash2,
+          danger: true,
+          onSelected: () => _remove(a),
+        ),
+      ],
+    ];
     return AnimatedOpacity(
       duration: ColectoMotion.hover,
       opacity: on ? 1 : 0.6,
@@ -422,6 +443,22 @@ class _AccountsSettingsTabState extends State<AccountsSettingsTab> {
               ),
             ),
             const SizedBox(width: 8),
+            if (!narrow && total > 1) ...[
+              ColectoIconButton(
+                icon: LucideIcons.chevronUp,
+                tooltip: 'Move ${a.displayName} up',
+                onPressed: _working || !canMoveUp
+                    ? null
+                    : () => c.reorderAccounts(index, index - 1),
+              ),
+              ColectoIconButton(
+                icon: LucideIcons.chevronDown,
+                tooltip: 'Move ${a.displayName} down',
+                onPressed: _working || !canMoveDown
+                    ? null
+                    : () => c.reorderAccounts(index, index + 2),
+              ),
+            ],
             if (real && !narrow) ...[
               ColectoIconButton(
                 icon: _checking == a.id
@@ -446,19 +483,29 @@ class _AccountsSettingsTabState extends State<AccountsSettingsTab> {
                 onPressed: busy ? null : () => _remove(a),
               ),
               const SizedBox(width: 6),
-            ] else if (real)
+            ] else if (actions.isNotEmpty)
               Builder(
                 builder: (ctx) => ColectoIconButton(
                   icon: LucideIcons.ellipsis,
                   tooltip: 'More',
                   onPressed: busy
                       ? null
-                      : () => showColectoContextMenu(
-                          context: ctx,
-                          globalPosition: colectoRectOf(ctx).bottomLeft,
-                          title: a.displayName,
-                          items: actions,
-                        ),
+                      : () {
+                          if (colectoTouch(ctx)) {
+                            showColectoModalPicker(
+                              context: ctx,
+                              title: a.displayName,
+                              items: actions,
+                            );
+                          } else {
+                            showColectoMenu(
+                              context: ctx,
+                              anchor: colectoRectOf(ctx),
+                              items: actions,
+                              alignRight: true,
+                            );
+                          }
+                        },
                 ),
               ),
             ColectoSwitch(

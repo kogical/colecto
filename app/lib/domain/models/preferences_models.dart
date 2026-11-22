@@ -152,6 +152,7 @@ class Preferences {
     this.notifications = const NotificationPreferences(),
     this.remoteImages = false,
     this.accountsEnabled = const {},
+    this.accountOrder = const [],
     this.onboarded = false,
     this.listDensity = ListDensity.full,
     this.dateGroups = true,
@@ -180,6 +181,7 @@ class Preferences {
   final NotificationPreferences notifications;
   final bool remoteImages;
   final Map<String, bool> accountsEnabled;
+  final List<String> accountOrder;
   final bool onboarded;
   final ListDensity listDensity;
   final bool dateGroups;
@@ -211,6 +213,9 @@ class Preferences {
       ),
       remoteImages: json['remote_images'] as bool? ?? false,
       accountsEnabled: rawEnabled.map((k, v) => MapEntry(k, v == true)),
+      accountOrder: (json['account_order'] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .toList(growable: false),
       onboarded: json['onboarded'] as bool? ?? false,
       listDensity: ListDensity.fromJson(json['list_density'] as String?),
       dateGroups: json['date_groups'] as bool? ?? true,
@@ -241,6 +246,7 @@ class PreferencesPatch {
     this.notifications,
     this.remoteImages,
     this.accountsEnabled,
+    this.accountOrder,
     this.onboarded,
     this.listDensity,
     this.dateGroups,
@@ -269,6 +275,7 @@ class PreferencesPatch {
   final NotificationPreferences? notifications;
   final bool? remoteImages;
   final Map<String, bool>? accountsEnabled;
+  final List<String>? accountOrder;
   final bool? onboarded;
   final ListDensity? listDensity;
   final bool? dateGroups;
@@ -290,6 +297,7 @@ class PreferencesPatch {
     if (notifications != null) 'notifications': notifications!.toJson(),
     if (remoteImages != null) 'remote_images': remoteImages,
     if (accountsEnabled != null) 'accounts_enabled': accountsEnabled,
+    if (accountOrder != null) 'account_order': accountOrder,
     if (onboarded != null) 'onboarded': onboarded,
     if (listDensity != null) 'list_density': listDensity!.toJson(),
     if (dateGroups != null) 'date_groups': dateGroups,

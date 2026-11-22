@@ -12,12 +12,18 @@ class ColectoToast {
     required this.message,
     this.detail,
     this.isError = false,
+    this.actionLabel,
+    this.onAction,
+    this.allowHoverHold = true,
   });
 
   final int id;
   final String message;
   final String? detail;
   final bool isError;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+  final bool allowHoverHold;
 }
 
 /// Colecto's notifications: they enter from the edge they are docked to,
@@ -292,6 +298,17 @@ class _ToastCardState extends State<_ToastCard>
                         ),
                       ),
                       const SizedBox(width: 6),
+                      if (t.actionLabel != null && t.onAction != null) ...[
+                        ColectoButton(
+                          label: t.actionLabel!,
+                          variant: ColectoButtonVariant.text,
+                          onPressed: () {
+                            t.onAction!();
+                            widget.onDismiss();
+                          },
+                        ),
+                        const SizedBox(width: 2),
+                      ],
                       Semantics(
                         label: 'Dismiss',
                         button: true,

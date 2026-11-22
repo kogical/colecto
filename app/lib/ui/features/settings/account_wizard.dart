@@ -33,10 +33,6 @@ Future<void> showAccountWizard(
         onClose: () => Navigator.of(ctx).maybePop(),
         onSaved: (saved, name) {
           Navigator.of(ctx).pop();
-          controller.showToast(
-            '$name saved',
-            detail: 'Colecto checks the connection in the background.',
-          );
         },
       ),
     ),

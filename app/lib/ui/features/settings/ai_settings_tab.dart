@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -32,7 +34,17 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
   RuleField _ruleField = RuleField.any;
   PreviewResult? _previewResult;
 
+  // Bulk relabel flow state (restored from pre-Flutter Colecto).
+  int _relabelCount = 50;
+  bool _relabeling = false;
+  String? _relabelNote;
+  bool _relabelFailed = false;
+
   AiSettings? _seeded;
+  Timer? _modelSaveTimer;
+  Timer? _ruleDescSaveTimer;
+  bool _modelDirty = false;
+  (String, LabelRule)? _pendingRuleDesc;
 
   @override
   void initState() {
@@ -73,8 +85,38 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
     sync(_timeoutCtrl, '${prev?.timeoutSeconds ?? 120}', '${s.timeoutSeconds}');
   }
 
+  void _scheduleModelSave() {
+    _modelDirty = true;
+    _modelSaveTimer?.cancel();
+    _modelSaveTimer = Timer(const Duration(milliseconds: 450), () {
+      if (mounted && _modelDirty) _saveModelSettings();
+    });
+  }
+
+  void _scheduleRuleDescSave(String label, LabelRule rule) {
+    _pendingRuleDesc = (label, rule);
+    _ruleDescSaveTimer?.cancel();
+    _ruleDescSaveTimer = Timer(const Duration(milliseconds: 450), () {
+      if (mounted) _flushRuleDescSave();
+    });
+  }
+
+  void _flushRuleDescSave() {
+    _ruleDescSaveTimer?.cancel();
+    final pending = _pendingRuleDesc;
+    _pendingRuleDesc = null;
+    if (pending != null) {
+      _saveLabelRule(pending.$1, pending.$2);
+    }
+  }
+
   @override
   void dispose() {
+    _modelSaveTimer?.cancel();
+    if (_modelDirty) {
+      _saveModelSettings();
+    }
+    _flushRuleDescSave();
     widget.controller.removeListener(_syncFromController);
     _textUrlCtrl.dispose();
     _textModelCtrl.dispose();
@@ -90,6 +132,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
   }
 
   Future<void> _saveModelSettings() async {
+    _modelSaveTimer?.cancel();
+    _modelDirty = false;
     final cur = widget.controller.aiSettings.settings;
     await widget.controller.saveAiSettings(
       cur.copyWith(
@@ -202,6 +246,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
               labelText: 'Base URL',
               hintText: 'https://api.openai.com/v1',
               keyboardType: TextInputType.url,
+              onChanged: (_) => _scheduleModelSave(),
+              onSubmitted: (_) => _saveModelSettings(),
             ),
             const SizedBox(height: 14),
             Row(
@@ -213,6 +259,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                     controller: _textModelCtrl,
                     labelText: 'Model',
                     hintText: 'gpt-4o-mini',
+                    onChanged: (_) => _scheduleModelSave(),
+                    onSubmitted: (_) => _saveModelSettings(),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -221,6 +269,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                     controller: _textMaxTokensCtrl,
                     labelText: 'Max tokens',
                     keyboardType: TextInputType.number,
+                    onChanged: (_) => _scheduleModelSave(),
+                    onSubmitted: (_) => _saveModelSettings(),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -229,6 +279,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                     controller: _timeoutCtrl,
                     labelText: 'Timeout (s)',
                     keyboardType: TextInputType.number,
+                    onChanged: (_) => _scheduleModelSave(),
+                    onSubmitted: (_) => _saveModelSettings(),
                   ),
                 ),
               ],
@@ -236,21 +288,16 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
             const SizedBox(height: 14),
             keyRow('text', _textKeyCtrl, view.keys.text),
             const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ColectoButton(
-                  label: 'Save',
-                  variant: ColectoButtonVariant.primary,
-                  onPressed: _saveModelSettings,
-                ),
-                ColectoButton(
-                  label: 'Test connection',
-                  icon: LucideIcons.plugZap,
-                  onPressed: () => c.testAiConnection('text'),
-                ),
-              ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ColectoButton(
+                label: 'Test connection',
+                icon: LucideIcons.plugZap,
+                onPressed: () async {
+                  if (_modelDirty) await _saveModelSettings();
+                  await c.testAiConnection('text');
+                },
+              ),
             ),
           ],
         ),
@@ -273,6 +320,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                     controller: _decUrlCtrl,
                     labelText: 'Base URL',
                     keyboardType: TextInputType.url,
+                    onChanged: (_) => _scheduleModelSave(),
+                    onSubmitted: (_) => _saveModelSettings(),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -280,6 +329,8 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                   child: ColectoTextField(
                     controller: _decModelCtrl,
                     labelText: 'Model',
+                    onChanged: (_) => _scheduleModelSave(),
+                    onSubmitted: (_) => _saveModelSettings(),
                   ),
                 ),
               ],
@@ -307,20 +358,16 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
             const SizedBox(height: 14),
             keyRow('decision', _decKeyCtrl, view.keys.decision),
             const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              children: [
-                ColectoButton(
-                  label: 'Save',
-                  variant: ColectoButtonVariant.primary,
-                  onPressed: _saveModelSettings,
-                ),
-                ColectoButton(
-                  label: 'Test connection',
-                  icon: LucideIcons.plugZap,
-                  onPressed: () => c.testAiConnection('decision'),
-                ),
-              ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ColectoButton(
+                label: 'Test connection',
+                icon: LucideIcons.plugZap,
+                onPressed: () async {
+                  if (_modelDirty) await _saveModelSettings();
+                  await c.testAiConnection('decision');
+                },
+              ),
             ),
           ],
         ),
@@ -342,6 +389,7 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                       label: label,
                       selected: activeLabel == label,
                       onTap: () {
+                        _flushRuleDescSave();
                         final rule =
                             s.labels[c.activeAccount]?[label] ??
                             const LabelRule();
@@ -381,11 +429,18 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
                 controller: _ruleDescCtrl,
                 labelText: 'What belongs in “$activeLabel”',
                 hintText: 'Receipts and invoices from shops and services',
-                helperText: 'Press Enter to save.',
-                onSubmitted: (v) => _saveLabelRule(
+                onChanged: (v) => _scheduleRuleDescSave(
                   activeLabel,
                   currentRule.copyWith(description: v),
                 ),
+                onSubmitted: (v) {
+                  _ruleDescSaveTimer?.cancel();
+                  _pendingRuleDesc = null;
+                  _saveLabelRule(
+                    activeLabel,
+                    currentRule.copyWith(description: v),
+                  );
+                },
               ),
               const SizedBox(height: 16),
               const ColectoLabel('Patterns'),
@@ -482,25 +537,67 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   ColectoButton(
                     label: 'Preview on Inbox',
                     icon: LucideIcons.eye,
-                    onPressed: () async {
-                      final res = await c.previewAiRule(currentRule);
-                      if (mounted) setState(() => _previewResult = res);
-                    },
-                  ),
-                  ColectoButton(
-                    label: 'Relabel Inbox now',
-                    icon: LucideIcons.sparkles,
-                    variant: ColectoButtonVariant.ghost,
-                    onPressed: () => c.reclassifyMessages(
-                      c.messages.map((m) => m.id).toList(),
-                    ),
+                    onPressed: _relabeling
+                        ? null
+                        : () async {
+                            final res = await c.previewAiRule(currentRule);
+                            if (mounted) setState(() => _previewResult = res);
+                          },
                   ),
                 ],
               ),
+              const SizedBox(height: 18),
+              const ColectoLabel('Relabel existing Inbox mail'),
+              const SizedBox(height: 4),
+              const ColectoParagraph(
+                'Check your newest cached Inbox messages against your rules '
+                'now, adding labels that match and removing ones that no '
+                'longer apply.',
+                small: true,
+                tone: ColectoTone.secondary,
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  ColectoSegmented<int>(
+                    value: _relabelCount,
+                    options: const [
+                      (10, '10'),
+                      (25, '25'),
+                      (50, '50'),
+                      (100, '100'),
+                    ],
+                    onChanged: _relabeling
+                        ? (_) {}
+                        : (n) => setState(() => _relabelCount = n),
+                  ),
+                  ColectoButton(
+                    label: _relabeling
+                        ? 'Checking…'
+                        : 'Relabel newest $_relabelCount',
+                    icon: LucideIcons.sparkles,
+                    onPressed: _relabeling ? null : _runBulkRelabel,
+                  ),
+                ],
+              ),
+              if (_relabelNote != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _relabelNote!,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: _relabelFailed ? p.danger : p.ink2,
+                  ),
+                ),
+              ],
               if (_previewResult != null) ...[
                 const SizedBox(height: 14),
                 ColectoNotice(
@@ -528,6 +625,60 @@ class _AiSettingsTabState extends State<AiSettingsTab> {
         ),
       ],
     );
+  }
+
+  Future<void> _runBulkRelabel() async {
+    final c = widget.controller;
+    setState(() {
+      _relabeling = true;
+      _relabelFailed = false;
+      _relabelNote = 'Finding your newest messages…';
+    });
+    try {
+      final snap = await c.backend.cachedMessages(
+        c.activeAccount,
+        folder: 'inbox',
+        limit: _relabelCount,
+      );
+      final ids = snap.messages.take(_relabelCount).map((m) => m.id).toList();
+      if (!mounted) return;
+      if (ids.isEmpty) {
+        setState(() {
+          _relabeling = false;
+          _relabelNote = 'Your Inbox has no saved messages yet. Open it once, then try again.';
+        });
+        return;
+      }
+      const batchSize = 5;
+      var checked = 0;
+      var changed = 0;
+      for (var at = 0; at < ids.length; at += batchSize) {
+        final end = (at + batchSize).clamp(0, ids.length);
+        final res = await c.backend.aiReclassify(
+          c.activeAccount,
+          ids.sublist(at, end),
+        );
+        checked += res.checked;
+        changed += res.changed;
+        if (!mounted) return;
+        setState(() => _relabelNote = 'Checked $end of ${ids.length}…');
+      }
+      await c.loadLabels();
+      if (!mounted) return;
+      final msgWord = checked == 1 ? 'message' : 'messages';
+      final lblWord = changed == 1 ? 'label' : 'labels';
+      setState(() {
+        _relabeling = false;
+        _relabelNote = 'Checked $checked $msgWord; $changed $lblWord changed.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _relabeling = false;
+        _relabelFailed = true;
+        _relabelNote = '$e';
+      });
+    }
   }
 
   Future<void> _saveLabelRule(String label, LabelRule rule) async {

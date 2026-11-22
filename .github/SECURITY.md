@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security problems privately through GitHub:
-**[Report a vulnerability](https://github.com/hexvale-labs/colecto/security/advisories/new)**
+**[Report a vulnerability](https://github.com/kogical/colecto/security/advisories/new)**
 (the **Security** tab → **Report a vulnerability**).
 
 Do not open a public issue, pull request or discussion for a vulnerability. A private
@@ -12,7 +12,7 @@ if you like.
 
 Helpful details:
 
-- what is affected (the app, the daemon, the MCP bridge or an extension) and which
+- what is affected (the app, the daemon, the FFI library or the MCP bridge) and which
   version or commit
 - how to reproduce it, with a proof of concept if you have one
 - what an attacker could do with it
@@ -30,8 +30,7 @@ Colecto handles mail credentials and untrusted mail, so we especially want to he
 
 - reading or changing mail, drafts, credentials or settings without the owner token
   or a properly scoped API key
-- HTML mail escaping its sandbox, running script, or loading remote content the owner
-  did not allow
-- third-party extensions escaping the WebAssembly sandbox or exceeding their grants
+- HTML mail escaping its sanitizer or sandbox, running script, or loading remote
+  content the owner did not allow
 - credentials or tokens appearing in logs, URLs or responses
-- automation sending mail without the owner's approval
+- automation or MCP tools sending mail without the owner's approval

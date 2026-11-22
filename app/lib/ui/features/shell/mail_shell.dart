@@ -1,5 +1,6 @@
 import 'package:cupertino_ui/cupertino_ui.dart';
-import 'package:flutter/gestures.dart' show kMiddleMouseButton;
+import 'package:flutter/gestures.dart'
+    show PointerScrollEvent, PointerSignalEvent, kMiddleMouseButton;
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
@@ -384,23 +385,59 @@ class _AccountsBar extends StatelessWidget {
 }
 
 /// The reader's tab strip for open conversations. Hidden when no tabs are open.
-class _PaneHeader extends StatelessWidget {
+/// Vertical mouse-wheel scrolling scrolls the strip horizontally.
+class _PaneHeader extends StatefulWidget {
   const _PaneHeader({required this.children});
 
   final List<Widget> children;
 
   @override
+  State<_PaneHeader> createState() => _PaneHeaderState();
+}
+
+class _PaneHeaderState extends State<_PaneHeader> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent || !_scroll.hasClients) return;
+    final delta = event.scrollDelta.dx != 0
+        ? event.scrollDelta.dx
+        : event.scrollDelta.dy;
+    if (delta == 0) return;
+    final target = (_scroll.offset + delta).clamp(
+      0.0,
+      _scroll.position.maxScrollExtent,
+    );
+    if (target != _scroll.offset) {
+      _scroll.jumpTo(target);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final p = ColectoPalette.of(context);
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: p.lineSoft)),
-      ),
-      child: ScrollConfiguration(
-        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-        child: ListView(scrollDirection: Axis.horizontal, children: children),
+    return Listener(
+      onPointerSignal: _onPointerSignal,
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: p.lineSoft)),
+        ),
+        child: ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+          child: ListView(
+            controller: _scroll,
+            scrollDirection: Axis.horizontal,
+            children: widget.children,
+          ),
+        ),
       ),
     );
   }
@@ -854,14 +891,8 @@ class _PhoneShellState extends State<_PhoneShell> {
   List<Folder> get _tabs => primaryFolders(c.folders);
 
   void _more() {
-    final rect = Rect.fromCenter(
-      center: MediaQuery.sizeOf(context).bottomRight(const Offset(-40, -40)),
-      width: 1,
-      height: 1,
-    );
-    showColectoContextMenu(
+    showColectoModalPicker(
       context: context,
-      globalPosition: rect.center,
       title: 'Mailboxes',
       items: [
         for (final f in c.folders.where((f) => !_tabs.contains(f)))

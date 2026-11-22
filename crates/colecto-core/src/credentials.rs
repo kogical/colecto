@@ -347,6 +347,15 @@ impl Vault {
                     Some(Zeroizing::new(**key)),
                 )
             }
+            // With nothing secret to keep, the system store is not needed at all.
+            Mode::System { .. } if secrets.is_empty() => (
+                Mode::System {
+                    entry: None,
+                    nonce: [0; 24],
+                    ciphertext: vec![],
+                },
+                None,
+            ),
             Mode::System { .. } => (self.stage_system(&accounts, &secrets)?, None),
         };
         self.persist(accounts, secrets, mode, next_key)

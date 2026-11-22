@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:colecto/app.dart';
 import 'package:colecto/data/repositories/in_memory_mail_backend.dart';
 import 'package:colecto/data/repositories/mail_backend.dart';
-import 'package:colecto/domain/models/preferences_models.dart';
 import 'package:colecto/ui/core/theme/colecto_palette.dart';
 import 'package:colecto/ui/features/shell/mail_controller.dart';
 
@@ -34,7 +33,8 @@ Future<MailController> pumpColectoApp(
   )..previewDesign(design);
   await controller.initialize();
   if (onboarded) {
-    await controller.updatePreferences(const PreferencesPatch(onboarded: true));
+    // As if the person chose "Explore with sample mail first".
+    await controller.finishOnboarding(demo: true);
   }
   addTearDown(controller.dispose);
 

@@ -7,7 +7,80 @@ use std::{
     time::Duration,
 };
 
+const USAGE: &str = "Usage:
+  colecto-daemon                    Serve mail (configured with COLECTO_* variables)
+  colecto-daemon export <file.zip>  Back up accounts, drafts, labels and settings
+  colecto-daemon import <file.zip>  Replace this daemon's data with a backup
+
+Stop the daemon before export or import; both use COLECTO_DATA_DIR.
+COLECTO_BACKUP_PASSPHRASE seals a new backup (and includes saved passwords), or opens a
+sealed one. COLECTO_MASTER_PASSWORD unlocks credentials protected by a master password.";
+
+fn data_directory() -> PathBuf {
+    env::var_os("COLECTO_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".colecto"))
+}
+
+/// `export` or `import` a backup in the same format as the app and the HTTP API.
+fn backup(command: &str, file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut accounts = secrets::open_accounts(&data_directory())?;
+    if accounts.security().locked
+        && let Ok(password) = env::var("COLECTO_MASTER_PASSWORD")
+    {
+        accounts.unlock(&password)?;
+    }
+    let passphrase = env::var("COLECTO_BACKUP_PASSPHRASE")
+        .ok()
+        .filter(|p| !p.is_empty());
+    if command == "export" {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let bytes =
+            accounts.export_backup(passphrase.as_deref(), env!("CARGO_PKG_VERSION"), now)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        std::io::Write::write_all(&mut options.open(file)?, &bytes)?;
+        println!(
+            "Backed up to {}{}",
+            file.display(),
+            if passphrase.is_some() {
+                ", sealed with your passphrase and including saved passwords"
+            } else {
+                ". Saved passwords are not included without COLECTO_BACKUP_PASSPHRASE"
+            }
+        );
+    } else {
+        accounts.import_backup(&std::fs::read(file)?, passphrase.as_deref())?;
+        println!("Restored {}", file.display());
+    }
+    Ok(())
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args().skip(1);
+    match args.next().as_deref() {
+        None => {}
+        Some(command @ ("export" | "import")) => {
+            let file = args
+                .next()
+                .ok_or_else(|| format!("Usage: colecto-daemon {command} <backup.zip>"))?;
+            let command = command.to_owned();
+            return tokio::task::spawn_blocking(move || {
+                backup(&command, Path::new(&file)).map_err(|e| e.to_string())
+            })
+            .await?
+            .map_err(Into::into);
+        }
+        Some("help" | "--help" | "-h") => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        Some(other) => return Err(format!("Unknown command `{other}`.\n\n{USAGE}").into()),
+    }
     // Relay mode: a remote daemon syncs the mail, and this one only shows its notifications.
     if let Ok(origin) = env::var("COLECTO_RELAY_ORIGIN") {
         let token_file = PathBuf::from(
@@ -20,9 +93,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .map_err(Into::into);
     }
-    let directory = env::var_os("COLECTO_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".colecto"));
+    let directory = data_directory();
     let assets = match env::var_os("COLECTO_ASSETS") {
         Some(path) => Assets::Directory(PathBuf::from(path)),
         None => Assets::None,

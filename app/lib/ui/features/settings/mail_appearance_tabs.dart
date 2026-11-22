@@ -842,6 +842,12 @@ class _ServersSettingsTabState extends State<ServersSettingsTab> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 ColectoButton(label: 'Connect', onPressed: _open),
+                if (kind == BackendKind.remoteHttp)
+                  ColectoButton(
+                    label: 'Forget this session’s access token',
+                    variant: ColectoButtonVariant.text,
+                    onPressed: c.forgetSessionToken,
+                  ),
                 if (kind != BackendKind.demo)
                   ColectoButton(
                     label: 'Explore the demo mail',

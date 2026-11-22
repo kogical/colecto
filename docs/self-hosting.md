@@ -83,6 +83,16 @@ docker run --rm -v colecto_colecto-data:/data -v "$PWD":/backup debian:bookworm-
 docker compose start colecto
 ```
 
+That copies the whole database. For a portable backup that the app and any other
+daemon can restore, use `colecto-daemon export` and `import` (see
+[Backups](accounts.md#backups)) with the container stopped:
+
+```sh
+docker compose stop colecto
+docker compose run --rm -e COLECTO_BACKUP_PASSPHRASE colecto colecto-daemon export /data/backup.zip
+docker compose start colecto
+```
+
 To rotate the access token, delete `/data/access-token` and restart the container; a
 new one is created and the old one stops working.
 

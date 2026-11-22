@@ -122,6 +122,25 @@ class _CommandPaletteState extends State<_CommandPalette> {
           onRun: () => c.generateSummary(selected.id),
         ),
       ],
+      for (final sort in ThreadSort.values)
+        if (sort != c.sort)
+          _Command(
+            title: 'Sort: ${sort.label}',
+            group: 'Mail',
+            icon: LucideIcons.arrowDownUp,
+            keywords: 'sort order',
+            onRun: () => c.setSort(sort),
+          ),
+      if (c.sort != ThreadSort.newest ||
+          c.activeLabel != null ||
+          c.searchQuery.isNotEmpty)
+        _Command(
+          title: 'Clear search, sorting and filters',
+          group: 'Mail',
+          icon: LucideIcons.x,
+          keywords: 'reset',
+          onRun: c.clearFilters,
+        ),
       for (final folder in c.folders)
         _Command(
           title: folder.name,

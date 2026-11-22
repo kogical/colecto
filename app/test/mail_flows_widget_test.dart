@@ -8,6 +8,7 @@ import 'package:colecto/domain/models/mail_models.dart';
 import 'package:colecto/domain/models/preferences_models.dart';
 import 'package:colecto/ui/core/theme/colecto_palette.dart';
 import 'package:colecto/ui/features/settings/account_wizard.dart';
+import 'package:colecto/ui/features/settings/settings_view.dart';
 import 'package:colecto/ui/features/shell/mail_controller.dart';
 
 import 'test_helpers.dart';
@@ -72,10 +73,59 @@ void main() {
 
     testWidgets('first run can skip to the sample mail', (tester) async {
       final c = await pumpColectoApp(tester, onboarded: false);
+      // The sample account stays off unless the person asks for it.
+      expect(c.preferences.accountEnabled('demo'), isFalse);
       await tester.tap(find.text('Explore with sample mail first'));
       await tester.pumpAndSettle();
       expect(c.preferences.onboarded, isTrue);
+      expect(c.preferences.accountEnabled('demo'), isTrue);
       expect(find.text('Welcome to Colecto'), findsWidgets);
+    });
+
+    testWidgets('a row menu labels and moves mail, and the list sorts', (
+      tester,
+    ) async {
+      final c = await pumpColectoApp(tester);
+      await tester.tap(
+        find.text('Q4 Architecture Review').first,
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Label: Newsletters'), findsOneWidget);
+      expect(find.text('Move to Sent'), findsOneWidget);
+      await tester.tap(find.text('Label: Newsletters'));
+      await tester.pumpAndSettle();
+      expect(
+        c.labels['Newsletters'],
+        contains(
+          c.threads.firstWhere((t) => t.subject.contains('Q4')).latest.id,
+        ),
+      );
+
+      c.setSort(ThreadSort.subject);
+      await tester.pumpAndSettle();
+      expect(find.text('Sorted subject a–z'), findsOneWidget);
+      final subjects = [for (final t in c.threads) t.subject.toLowerCase()];
+      expect(subjects, [...subjects]..sort());
+      await tester.tap(find.byTooltip('Clear sorting'));
+      await tester.pumpAndSettle();
+      expect(c.sort, ThreadSort.newest);
+    });
+
+    testWidgets('a locked backup needs matching passphrases', (tester) async {
+      final c = await pumpColectoApp(tester);
+      c.openSettings(SettingsSection.backup);
+      await tester.pumpAndSettle();
+      expect(find.text('Export a backup'), findsOneWidget);
+      final fields = find.descendant(
+        of: find.byType(SettingsView),
+        matching: find.byType(EditableText),
+      );
+      await tester.enterText(fields.at(0), 'correct horse');
+      await tester.enterText(fields.at(1), 'correct house');
+      await tester.tap(find.text('Export backup…'));
+      await tester.pumpAndSettle();
+      expect(find.text('The passphrases do not match.'), findsOneWidget);
     });
 
     testWidgets('open messages stay as reader tabs', (tester) async {

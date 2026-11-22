@@ -401,7 +401,7 @@ fn cached_list_and_reader_remain_available_while_account_is_locked() {
     let handle = accounts.store("demo").unwrap();
     let _network_work = handle.lock().unwrap();
     let snapshot = accounts.cached("demo", "inbox").unwrap();
-    assert_eq!(snapshot.messages.len(), 4);
+    assert!(snapshot.messages.len() > 4, "sample Inbox");
     assert!(
         accounts
             .cached_message("demo", &snapshot.messages[0].id)

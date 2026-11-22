@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -335,6 +336,33 @@ class RemoteHttpBackend implements MailBackend {
       body: {'action': action, 'password': password},
     );
     return SecurityInfo.fromJson(data as Map<String, dynamic>);
+  }
+
+  @override
+  Future<({String filename, Uint8List bytes})> exportBackup({
+    String passphrase = '',
+  }) async {
+    final data = await _request(
+      'POST',
+      '/backup/export',
+      body: {if (passphrase.isNotEmpty) 'passphrase': passphrase},
+    ) as Map<String, dynamic>;
+    return (
+      filename: data['filename'] as String? ?? 'colecto-backup.zip',
+      bytes: base64Decode(data['data'] as String? ?? ''),
+    );
+  }
+
+  @override
+  Future<void> importBackup(Uint8List bytes, {String passphrase = ''}) async {
+    await _request(
+      'POST',
+      '/backup/import',
+      body: {
+        'data': base64Encode(bytes),
+        if (passphrase.isNotEmpty) 'passphrase': passphrase,
+      },
+    );
   }
 
   @override

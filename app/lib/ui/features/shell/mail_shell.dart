@@ -488,19 +488,9 @@ class _PaneTab extends StatelessWidget {
 /// The reader's head: its tab, then a tab per open message. Selecting one
 /// shows it; × (or a middle click) closes it; right-click offers Close all.
 class _ReaderHeader extends StatelessWidget {
-  const _ReaderHeader({
-    required this.controller,
-    this.paneTab = true,
-    this.onEmpty,
-  });
+  const _ReaderHeader({required this.controller});
 
   final MailController controller;
-
-  /// Whether to lead with the Reader pane's own tab (wide layouts).
-  final bool paneTab;
-
-  /// Called when closing leaves no tab (phones leave the page).
-  final VoidCallback? onEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -508,22 +498,15 @@ class _ReaderHeader extends StatelessWidget {
     final active = c.compose == null ? c.activeTabId : null;
     return _PaneHeader(
       children: [
-        if (paneTab)
-          const _PaneTab(icon: LucideIcons.bookOpen, label: 'Reader'),
+        const _PaneTab(icon: LucideIcons.bookOpen, label: 'Reader'),
         for (final t in c.openTabs)
           _MessageTab(
             label: t.subject.trim().isEmpty ? '(No subject)' : t.subject,
             active: t.id == active,
             onTap: () => c.selectThread(t),
-            onClose: () {
-              c.closeTab(t.id);
-              if (c.openTabs.isEmpty) onEmpty?.call();
-            },
+            onClose: () => c.closeTab(t.id),
             onCloseOthers: () => c.closeOtherTabs(t),
-            onCloseAll: () {
-              c.closeAllTabs();
-              onEmpty?.call();
-            },
+            onCloseAll: c.closeAllTabs,
           ),
       ],
     );
@@ -1268,25 +1251,11 @@ class _PhoneReaderPage extends StatelessWidget {
         bottom: false,
         child: ListenableBuilder(
           listenable: controller,
-          builder: (context, _) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Open messages as tabs, as on Colecto's phone reader.
-              if (controller.openTabs.length > 1)
-                _ReaderHeader(
-                  controller: controller,
-                  paneTab: false,
-                  onEmpty: () => Navigator.of(context).maybePop(),
-                ),
-              Expanded(
-                child: ReaderPane(
-                  controller: controller,
-                  onCompose: onCompose,
-                  showBackButton: true,
-                  onBack: () => Navigator.of(context).maybePop(),
-                ),
-              ),
-            ],
+          builder: (context, _) => ReaderPane(
+            controller: controller,
+            onCompose: onCompose,
+            showBackButton: true,
+            onBack: () => Navigator.of(context).maybePop(),
           ),
         ),
       ),

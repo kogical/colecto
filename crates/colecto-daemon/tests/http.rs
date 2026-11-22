@@ -224,8 +224,9 @@ async fn send_content_conversation_and_attachment_sized_bodies() {
         .oneshot(request("POST", "/api/v1/send", origin, &body))
         .await
         .unwrap();
-    // Reaches the demo store (no account) instead of the global 512 KB body limit.
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // Reaches the demo store instead of the global 512 KB body limit; the sample account
+    // files the message in its Sent folder.
+    assert_eq!(response.status(), StatusCode::OK);
 
     let account = router
         .oneshot(request("GET", "/api/v1/account", origin, ""))
@@ -795,4 +796,86 @@ async fn sse_events_stream_live_updates_and_reject_unauthorized_clients() {
     assert!(received.contains(r#""on":true"#), "{received}");
 
     server.abort();
+}
+
+#[tokio::test]
+async fn backups_export_from_one_daemon_and_restore_into_another() {
+    let origin = "http://127.0.0.1:4173";
+    let from = tempfile::tempdir().unwrap();
+    let source = authenticated(app(
+        MailStore::open(from.path()).unwrap(),
+        "127.0.0.1:4173".into(),
+        from.path().into(),
+    ))
+    .await;
+    for (path, body) in [
+        (
+            "/api/v1/drafts",
+            r#"{"recipient":"a@example.test","subject":"Kept in the backup","body":"Hello"}"#,
+        ),
+        ("/api/v1/preferences", r##"{"accent":"#8ec5f0"}"##),
+    ] {
+        let response = source
+            .clone()
+            .oneshot(request("POST", path, origin, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    let response = source
+        .clone()
+        .oneshot(request("POST", "/api/v1/backup/export", origin, "{}"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let file: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 10_000_000).await.unwrap()).unwrap();
+    assert!(file["filename"].as_str().unwrap().ends_with(".zip"));
+
+    let to = tempfile::tempdir().unwrap();
+    let target = authenticated(app(
+        MailStore::open(to.path()).unwrap(),
+        "127.0.0.1:4173".into(),
+        to.path().into(),
+    ))
+    .await;
+    let body = serde_json::json!({"data": file["data"]}).to_string();
+    let response = target
+        .clone()
+        .oneshot(request("POST", "/api/v1/backup/import", origin, &body))
+        .await
+        .unwrap();
+    let status = response.status();
+    let detail = to_bytes(response.into_body(), 100_000).await.unwrap();
+    assert_eq!(status, StatusCode::NO_CONTENT, "{detail:?}");
+    for (path, expected) in [
+        ("/api/v1/drafts", "Kept in the backup"),
+        ("/api/v1/preferences", "#8ec5f0"),
+    ] {
+        let response = target
+            .clone()
+            .oneshot(request("GET", path, origin, ""))
+            .await
+            .unwrap();
+        let text = String::from_utf8(
+            to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains(expected), "{path}: {text}");
+    }
+
+    // Something that is not a backup is refused, and nothing changes.
+    let response = target
+        .oneshot(request(
+            "POST",
+            "/api/v1/backup/import",
+            origin,
+            r#"{"data":"bm90IGEgemlw"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

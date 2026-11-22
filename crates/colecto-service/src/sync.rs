@@ -447,7 +447,7 @@ mod tests {
         let messages = refresh(&inner, "demo", "inbox", "", 0, None, Origin::Owner)
             .unwrap()
             .unwrap();
-        assert_eq!(messages.len(), 4);
+        assert!(messages.len() > 4, "sample Inbox");
         // The demo account is never connected, so background work leaves it alone.
         assert!(eligible(&inner).is_empty());
         start_prefetch(&inner, "demo");

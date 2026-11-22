@@ -7,6 +7,7 @@ import '../shell/mail_controller.dart';
 import 'accounts_settings_tab.dart';
 import 'ai_settings_tab.dart';
 import 'automation_tabs.dart';
+import 'backup_settings_tab.dart';
 import 'mail_appearance_tabs.dart';
 
 /// Colecto's Settings: a section list on the left, a breadcrumb and a close
@@ -46,6 +47,7 @@ class _SettingsViewState extends State<SettingsView> {
       SettingsSection.notifications => NotificationsSettingsTab(controller: c),
       SettingsSection.privacy => PrivacySettingsTab(controller: c),
       SettingsSection.servers => ServersSettingsTab(controller: c),
+      SettingsSection.backup => BackupSettingsTab(controller: c),
       SettingsSection.ai => AiSettingsTab(controller: c),
       SettingsSection.apiKeys => ApiKeysSettingsTab(controller: c),
       SettingsSection.sendApprovals => SendApprovalsSettingsTab(controller: c),

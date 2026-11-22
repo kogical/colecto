@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:async';
 
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -26,6 +27,7 @@ enum SettingsSection {
   notifications('notifications', 'Notifications', LucideIcons.bell),
   privacy('privacy', 'Privacy', LucideIcons.image),
   servers('servers', 'Connection', LucideIcons.server),
+  backup('backup', 'Backup', LucideIcons.databaseBackup),
   ai('ai', 'AI', LucideIcons.cpu),
   apiKeys('api-keys', 'API keys', LucideIcons.keyRound),
   sendApprovals('send-approvals', 'Send approvals', LucideIcons.shieldCheck);
@@ -44,6 +46,17 @@ enum SettingsSection {
 }
 
 enum BackendKind { demo, remoteHttp, localFfi }
+
+/// How the message list is ordered, as in Colecto's mailbox.
+enum ThreadSort {
+  newest('Newest first'),
+  oldest('Oldest first'),
+  sender('Sender A–Z'),
+  subject('Subject A–Z');
+
+  const ThreadSort(this.label);
+  final String label;
+}
 
 class ComposeRequest {
   const ComposeRequest({
@@ -378,7 +391,29 @@ class MailController extends ChangeNotifier {
   String? get activeLabel => _activeLabel;
   String get searchQuery => _searchQuery;
   List<MailMessage> get messages => _messages;
-  List<ConversationThread> get threads => _threads;
+  ThreadSort _sort = ThreadSort.newest;
+  ThreadSort get sort => _sort;
+  void setSort(ThreadSort sort) {
+    if (_sort == sort) return;
+    _sort = sort;
+    notifyListeners();
+  }
+
+  /// The conversations in the list, in the chosen order.
+  List<ConversationThread> get threads {
+    String key(ConversationThread t) => switch (_sort) {
+      ThreadSort.sender => t.latest.displaySender,
+      _ => t.subject,
+    }.toLowerCase();
+    return switch (_sort) {
+      ThreadSort.newest => _threads,
+      ThreadSort.oldest => _threads.reversed.toList(growable: false),
+      ThreadSort.sender || ThreadSort.subject => [
+        ..._threads,
+      ]..sort((a, b) => key(a).compareTo(key(b))),
+    };
+  }
+
   List<Draft> get drafts => _drafts;
   Set<String> get bulkSelectedIds => Set.unmodifiable(_bulkSelectedIds);
 
@@ -503,6 +538,15 @@ class MailController extends ChangeNotifier {
     _conversation = const [];
     _authRequired = false;
     await initialize();
+  }
+
+  /// Forgets the daemon access token kept for this session and asks for it
+  /// again, as Colecto's Connection page did.
+  void forgetSessionToken() {
+    clearSessionToken();
+    _daemonToken = '';
+    _authRequired = true;
+    notifyListeners();
   }
 
   Future<void> authenticateDaemon(String url, String token) async {
@@ -730,6 +774,17 @@ class MailController extends ChangeNotifier {
     _bulkSelectedIds.clear();
     notifyListeners();
     await loadMailbox(refresh: false);
+  }
+
+  /// Back to the whole folder, newest first.
+  Future<void> clearFilters() async {
+    _sort = ThreadSort.newest;
+    if (_activeLabel != null) {
+      await selectFolder(_activeFolder);
+    } else {
+      notifyListeners();
+    }
+    if (_searchQuery.isNotEmpty) await setSearchQuery('');
   }
 
   Future<void> setSearchQuery(String query) async {
@@ -985,16 +1040,17 @@ class MailController extends ChangeNotifier {
   }
 
   void selectAdjacentThread(int delta) {
-    if (_threads.isEmpty) return;
+    final list = threads;
+    if (list.isEmpty) return;
     final currentIdx = _selectedMessageId == null
         ? -1
-        : _threads.indexWhere(
+        : list.indexWhere(
             (t) => t.messages.any((m) => m.id == _selectedMessageId),
           );
     final nextIdx = currentIdx < 0
-        ? (delta > 0 ? 0 : _threads.length - 1)
-        : (currentIdx + delta).clamp(0, _threads.length - 1);
-    unawaited(selectThread(_threads[nextIdx]));
+        ? (delta > 0 ? 0 : list.length - 1)
+        : (currentIdx + delta).clamp(0, list.length - 1);
+    unawaited(selectThread(list[nextIdx]));
   }
 
   Future<void> loadMessageContent(
@@ -1253,6 +1309,47 @@ class MailController extends ChangeNotifier {
     } on MailBackendException catch (e) {
       showToast(e.message, isError: true);
     }
+  }
+
+  // Backups
+  /// A backup of this service's data; a failure goes to [onError].
+  Future<({String filename, Uint8List bytes})?> exportBackup({
+    String passphrase = '',
+    required ValueChanged<String> onError,
+  }) async {
+    try {
+      return await _backend.exportBackup(passphrase: passphrase);
+    } on MailBackendException catch (e) {
+      onError(e.message);
+      return null;
+    }
+  }
+
+  /// Restores a backup, then reloads everything from it. Returns whether it
+  /// worked; a failure goes to [onError] and changes nothing.
+  Future<bool> importBackup(
+    Uint8List bytes, {
+    String passphrase = '',
+    required ValueChanged<String> onError,
+  }) async {
+    try {
+      await _backend.importBackup(bytes, passphrase: passphrase);
+    } on MailBackendException catch (e) {
+      onError(e.message);
+      return false;
+    }
+    _tabs.clear();
+    _activeAccount = '';
+    _selectedMessageId = null;
+    _conversation = const [];
+    _contentCache.clear();
+    _summaries.clear();
+    await initialize();
+    showToast(
+      'Backup restored',
+      detail: 'Accounts without saved passwords need you to sign in again.',
+    );
+    return true;
   }
 
   // AI

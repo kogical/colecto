@@ -123,6 +123,15 @@ class LocalFfiBackend implements MailBackend {
       _delegate.securityAction(action, password: password);
 
   @override
+  Future<({String filename, Uint8List bytes})> exportBackup({
+    String passphrase = '',
+  }) => _delegate.exportBackup(passphrase: passphrase);
+
+  @override
+  Future<void> importBackup(Uint8List bytes, {String passphrase = ''}) =>
+      _delegate.importBackup(bytes, passphrase: passphrase);
+
+  @override
   Future<List<AccountSync>> syncStatus() => _delegate.syncStatus();
 
   @override

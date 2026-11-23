@@ -44,7 +44,7 @@ class _RenderOccluder extends RenderProxyBox implements FrameClient {
   void syncAfterFrame({required bool seen}) {
     _c.setOccluder(
       this,
-      seen && attached && hasSize ? localToGlobal(Offset.zero) & size : null,
+      seen && attached && hasSize ? globalBounds(this) : null,
     );
   }
 }

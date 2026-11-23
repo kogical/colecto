@@ -79,8 +79,9 @@ SizedBox(
 - **Safety defaults:** page JavaScript is disabled (the plugin's own probes
   run in an isolated world), storage is off, the web context is ephemeral,
   and `blockNetwork: true` blocks every `http(s)`, `ws(s)` and `ftp` load.
-  `data:` URLs still work. This is defence in depth, not a sanitizer: if you
-  show untrusted HTML, sanitize it first.
+  `data:` URLs still work. If the block list cannot be compiled, the widget
+  builds `fallback` instead of loading the page unprotected. This is defence
+  in depth, not a sanitizer: if you show untrusted HTML, sanitize it first.
 - **Memory:** a view's WebKit widget is destroyed when the widget is disposed,
   and the shared web context goes with the last view.
 

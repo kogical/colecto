@@ -26,9 +26,11 @@ namespace {
 constexpr char kChannel[] = "kogi_webview";
 constexpr char kFilterId[] = "kogi-block-network";
 // Blocks every network fetch; data:, cid-rewritten and about: content loads.
+// One rule per scheme: WebKit's content-blocker regexes reject disjunctions.
 constexpr char kBlockNetworkRules[] =
-    R"([{"trigger":{"url-filter":"^(https?|wss?|ftp)://"},)"
-    R"("action":{"type":"block"}}])";
+    R"([{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}},)"
+    R"({"trigger":{"url-filter":"^wss?://"},"action":{"type":"block"}},)"
+    R"({"trigger":{"url-filter":"^ftp://"},"action":{"type":"block"}}])";
 
 struct KogiView;
 
@@ -51,6 +53,7 @@ struct KogiView {
   GtkWidget* web = nullptr;   // WebKitWebView at full slot size
   GdkRectangle visible = {0, 0, 0, 0};  // window coords
   int width = 0;
+  double zoom = 1;
   bool shown = false;
   bool covered = false;
   bool internal_scroll = false;
@@ -299,7 +302,13 @@ void load(KogiView* v, const char* html) {
     return;
   }
   webkit_user_content_manager_remove_all_filters(ucm);
-  if (v->block_network && g_plugin->block_filter != nullptr) {
+  if (v->block_network) {
+    if (g_plugin->block_filter == nullptr) {
+      // Fail closed: without the filter this page could fetch remotely.
+      g_autoptr(FlValue) ev = event_for(v);
+      send("unavailable", ev);
+      return;
+    }
     webkit_user_content_manager_add_filter(ucm, g_plugin->block_filter);
   }
   webkit_web_view_load_html(WEBKIT_WEB_VIEW(v->web), html, "about:blank");
@@ -314,7 +323,7 @@ void on_filter_ready(GObject* source, GAsyncResult* result, gpointer) {
     return;
   }
   if (filter == nullptr) {
-    // The caller's own sanitizing still applies; remote loads are allowed.
+    // Views that block the network now report themselves unavailable.
     g_warning("kogi_webview: network filter unavailable: %s",
               error ? error->message : "unknown error");
   }
@@ -464,6 +473,12 @@ void place(KogiView* v, FlValue* args) {
     return_focus(v);
     gtk_widget_hide(v->clip);
     return;
+  }
+  double zoom = num(args, "zoom", 1);
+  if (std::fabs(zoom - v->zoom) > 1e-3) {
+    // Keeps the page at the same CSS width inside a scaled slot.
+    v->zoom = zoom;
+    webkit_web_view_set_zoom_level(WEBKIT_WEB_VIEW(v->web), zoom);
   }
   if (slot.width != v->width) {
     // A new width reflows the document; measure it again once laid out.

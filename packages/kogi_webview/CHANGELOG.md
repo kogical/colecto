@@ -1,3 +1,9 @@
+## Unreleased
+
+- Fix `blockNetwork`: the block list never compiled (WebKit rejects regex
+  disjunctions), so remote loads were allowed. A view that cannot enforce
+  `blockNetwork` now builds `fallback` instead of loading.
+
 ## 0.1.0
 
 - First release: live WebKitGTK views composited under Flutter on Linux

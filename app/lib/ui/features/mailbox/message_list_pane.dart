@@ -69,7 +69,10 @@ class _MessageListPaneState extends State<MessageListPane> {
     if (!c.preferences.autoLoadMore || !c.canLoadMore || !_scroll.hasClients) {
       return;
     }
-    if (_scroll.position.extentAfter <= 400) {
+    // Ask for the next page two screens early, so it is usually in before the
+    // reader scrolls to it.
+    final position = _scroll.position;
+    if (position.extentAfter <= position.viewportDimension * 2) {
       unawaited(c.loadMoreMessages());
     }
   }

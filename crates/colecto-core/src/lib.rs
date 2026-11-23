@@ -5,6 +5,7 @@ mod cache;
 mod content;
 mod database;
 mod imap_io;
+mod net;
 pub use cache::{MailCacheStore, MailSnapshot, SnapshotHandle};
 pub use content::{MAX_CONTENT_BYTES, MAX_CONTENT_MESSAGES};
 pub use database::{APPLICATION_ID, Database, Row, SCHEMA_VERSION, Value};
@@ -1140,7 +1141,7 @@ impl PushWatcher {
     }
     /// `Ok(true)` when new mail may have arrived, `Ok(false)` after a quiet `timeout`.
     /// `Error::Invalid` means the provider does not support push; keep polling instead.
-    pub fn wait(&self, timeout: std::time::Duration) -> Result<bool, Error> {
+    pub async fn wait(&self, timeout: std::time::Duration) -> Result<bool, Error> {
         // Hold the lock only to take a reference; a wait in progress keeps it until it returns.
         let account = self
             .account
@@ -1149,8 +1150,8 @@ impl PushWatcher {
             .clone()
             .ok_or(Error::Missing)?;
         match account.as_ref() {
-            Account::Imap(account) => account.wait_for_inbox(timeout),
-            Account::Jmap(account) => account.wait_for_change(timeout),
+            Account::Imap(account) => account.wait_for_inbox(timeout).await,
+            Account::Jmap(account) => account.wait_for_change(timeout).await,
         }
     }
 }
@@ -1526,7 +1527,7 @@ mod cache_tests {
         store.disconnect();
         assert!(watcher.account.lock().unwrap().is_none());
         assert!(matches!(
-            watcher.wait(std::time::Duration::ZERO),
+            crate::net::block_on(watcher.wait(std::time::Duration::ZERO)),
             Err(Error::Missing)
         ));
     }

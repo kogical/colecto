@@ -169,3 +169,25 @@ fn rejects_a_certificate_it_was_not_told_to_trust() {
     // The server's certificate is self-signed, so without pinning it TLS must fail.
     assert!(store.query("inbox", "").is_err());
 }
+
+#[test]
+fn push_wakes_on_new_mail_from_any_runtime() {
+    let Some(certificate) = certificate() else {
+        return;
+    };
+    let (_two, recipient) = account("user2", &certificate);
+    let watcher = recipient.push_watcher().unwrap();
+    // The service waits on its own runtime, not the one the transports use.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let waiting = runtime.spawn(async move { watcher.wait(Duration::from_secs(20)).await });
+    std::thread::sleep(Duration::from_secs(2));
+    let (_one, mut sender) = account("user1", &certificate);
+    let mut draft = message(&unique("Push"));
+    draft.recipient = "user2@example.com".into();
+    sender.send(draft).unwrap();
+    assert!(runtime.block_on(waiting).unwrap().unwrap());
+}

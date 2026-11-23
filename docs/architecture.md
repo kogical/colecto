@@ -52,7 +52,7 @@ Reference checkout: `github.com/kogical/colecto` (`origin/develop`).
 
 ### Ported and Cleaned Up
 - **`crates/colecto-core/`** (from `colecto-core`):
-  - `accounts.rs`, `cache.rs`, `content.rs`, `credentials.rs`, `database.rs`, `imap_io.rs` (async IMAP runtime, socket timeouts and the per-account session pool), `jmap.rs`, `labels.rs`, `lib.rs`, `mime.rs`, `remote.rs`, `search.rs`, plus `types.rs` (inlined domain structs), `html.rs` (`ammonia` sanitizer with remote-image blocking and `cid:` resolution), and `threading.rs`.
+  - `accounts.rs`, `cache.rs`, `content.rs`, `credentials.rs`, `database.rs`, `net.rs` (the Tokio runtime every network transport runs on), `imap_io.rs` (IMAP socket timeouts and the per-account session pool), `jmap.rs`, `labels.rs`, `lib.rs`, `mime.rs`, `remote.rs`, `search.rs`, plus `types.rs` (inlined domain structs), `html.rs` (`ammonia` sanitizer with remote-image blocking and `cid:` resolution), and `threading.rs`.
   - Consolidated `migrations/0001_initial.sql` for `colecto.db` including `ai_summaries` and `ai_autolabel_seen`.
 - **`crates/colecto-service/`** (from non-extension `colecto-host` + native AI service):
   - `lib.rs` (`MailService`), `error.rs`, `events.rs`, `sync.rs`, `discovery.rs`, `ai.rs` (combining host AI + native auto-label/reclassify without Wasm), `api_keys.rs`, `approvals.rs`, `notifications.rs`, `preferences.rs`, `settings.rs`, `secrets.rs`, `store.rs`, `logging.rs`, `releases.rs`.

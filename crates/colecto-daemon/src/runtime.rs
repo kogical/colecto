@@ -87,11 +87,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             env::var_os("COLECTO_TOKEN_FILE").ok_or("Relay mode requires COLECTO_TOKEN_FILE")?,
         );
         tracing::info!(%origin, "Relaying desktop notifications from a remote Colecto");
-        return tokio::task::spawn_blocking(move || {
-            notifications::run_agent(&origin, &token_file).map_err(|e| e.to_string())
-        })
-        .await?
-        .map_err(Into::into);
+        return notifications::run_agent(&origin, &token_file)
+            .await
+            .map_err(|error| error as Box<dyn std::error::Error>);
     }
     let directory = data_directory();
     let assets = match env::var_os("COLECTO_ASSETS") {
@@ -272,14 +270,9 @@ fn desktop_notifications(socket: &Path, token_file: &Path) {
     }
     let origin = format!("unix:{}", socket.display());
     let token_file = token_file.to_path_buf();
-    let spawned = std::thread::Builder::new()
-        .name("notifications".into())
-        .spawn(move || {
-            if let Err(error) = notifications::run_agent(&origin, &token_file) {
-                tracing::warn!(%error, "Desktop notifications stopped");
-            }
-        });
-    if let Err(error) = spawned {
-        tracing::warn!(%error, "Desktop notifications unavailable");
-    }
+    tokio::spawn(async move {
+        if let Err(error) = notifications::run_agent(&origin, &token_file).await {
+            tracing::warn!(%error, "Desktop notifications stopped");
+        }
+    });
 }

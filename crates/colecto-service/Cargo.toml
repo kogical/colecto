@@ -33,6 +33,7 @@ rustix.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus.workspace = true
+dbus-tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

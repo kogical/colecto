@@ -696,7 +696,7 @@ mod storage_tests {
         accounts.lock().unwrap();
         assert!(watcher.account.lock().unwrap().is_none());
         assert!(matches!(
-            watcher.wait(std::time::Duration::ZERO),
+            crate::net::block_on(watcher.wait(std::time::Duration::ZERO)),
             Err(Error::Missing)
         ));
     }

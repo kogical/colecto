@@ -2,7 +2,6 @@
 //! process, so opening the app many times makes at most one request every few hours.
 use serde::{Deserialize, Serialize};
 use std::{
-    io::Read,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -62,11 +61,11 @@ fn newer(current: &str, release: GitHubRelease) -> Option<Release> {
     })
 }
 
-fn fetch(current: &str) -> Result<Option<Release>, String> {
+async fn fetch(current: &str) -> Result<Option<Release>, String> {
     fn failed<E>(_: E) -> String {
         "Could not check for updates".to_string()
     }
-    let response = reqwest::blocking::Client::builder()
+    let mut response = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .user_agent(format!("colecto/{current}"))
         .build()
@@ -74,36 +73,39 @@ fn fetch(current: &str) -> Result<Option<Release>, String> {
         .get(LATEST)
         .header("accept", "application/vnd.github+json")
         .send()
+        .await
         .and_then(|response| response.error_for_status())
         .map_err(failed)?;
     let mut body = Vec::new();
-    std::io::Read::take(response, MAX_BODY as u64 + 1)
-        .read_to_end(&mut body)
-        .map_err(failed)?;
-    if body.len() > MAX_BODY {
-        return Err(failed(()));
+    while let Some(chunk) = response.chunk().await.map_err(failed)? {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_BODY {
+            return Err(failed(()));
+        }
     }
     let release: GitHubRelease = serde_json::from_slice(&body).map_err(failed)?;
     Ok(newer(current, release))
 }
 
 /// The newest release if it is newer than `current`, from the cache when it is recent.
-/// Blocks for up to the request timeout; call it off the async runtime.
-pub fn latest(current: &str) -> Result<Option<Release>, String> {
+pub async fn latest(current: &str) -> Result<Option<Release>, String> {
     if std::env::var(DISABLE_ENV).is_ok_and(|value| value == "off") {
         return Ok(None);
     }
-    if let Some((at, result)) = CACHE.lock().map_err(|_| "Update cache poisoned")?.as_ref() {
-        let keep = if result.is_ok() {
-            FRESH
-        } else {
-            RETRY_AFTER_FAILURE
-        };
-        if at.elapsed() < keep {
-            return result.clone();
+    {
+        let cache = CACHE.lock().map_err(|_| "Update cache poisoned")?;
+        if let Some((at, result)) = cache.as_ref() {
+            let keep = if result.is_ok() {
+                FRESH
+            } else {
+                RETRY_AFTER_FAILURE
+            };
+            if at.elapsed() < keep {
+                return result.clone();
+            }
         }
     }
-    let result = fetch(current);
+    let result = fetch(current).await;
     if let Err(error) = &result {
         tracing::debug!(%error, "Release check failed");
     }

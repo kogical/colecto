@@ -5,12 +5,14 @@ use crate::{
     mime::Attachment,
     types::{DraftInput, Folder, FolderRole, Message},
 };
-use reqwest::{
-    Url,
-    blocking::{Client, RequestBuilder},
-};
+use futures_util::{StreamExt, stream};
+use reqwest::{Client, RequestBuilder, Url};
 use serde_json::{Value, json};
-use std::{io::Read, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 const CORE: &str = "urn:ietf:params:jmap:core";
 const MAIL: &str = "urn:ietf:params:jmap:mail";
@@ -66,7 +68,18 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, Error> {
 fn list(value: &Value) -> Result<&Vec<Value>, Error> {
     value["list"].as_array().ok_or_else(failed)
 }
-fn decode(response: reqwest::blocking::Response) -> Result<Value, Error> {
+/// Read a response body, failing once it grows past `max` bytes.
+async fn read_limited(mut response: reqwest::Response, max: usize) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(http_error)? {
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() > max {
+            return Err(failed());
+        }
+    }
+    Ok(bytes)
+}
+async fn decode(response: reqwest::Response) -> Result<Value, Error> {
     if !response.status().is_success() {
         let code = response.status().as_u16();
         let detail = match code {
@@ -77,14 +90,7 @@ fn decode(response: reqwest::blocking::Response) -> Result<Value, Error> {
         };
         return Err(Error::Transport(format!("JMAP HTTP {code}: {detail}.")));
     }
-    let mut bytes = Vec::new();
-    response
-        .take(8_000_001)
-        .read_to_end(&mut bytes)
-        .map_err(|_| failed())?;
-    if bytes.len() > 8_000_000 {
-        return Err(failed());
-    }
+    let bytes = read_limited(response, 8_000_000).await?;
     serde_json::from_slice(&bytes).map_err(|_| failed())
 }
 
@@ -104,6 +110,25 @@ fn same_host_redirects() -> reqwest::redirect::Policy {
     })
 }
 
+/// One HTTP client for every JMAP account, so connections are kept alive and reused.
+fn client() -> Result<Client, Error> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(same_host_redirects())
+        .build()
+        .map_err(|_| failed())?;
+    Ok(CLIENT.get_or_init(|| client).clone())
+}
+
+/// The session document changes rarely (RFC 8620 §2), so it is reused for a few minutes
+/// instead of being fetched before every operation.
+const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Clone)]
 struct Session<'a> {
     account: &'a JmapAccount,
     client: Client,
@@ -114,6 +139,23 @@ struct Session<'a> {
     id: String,
     submission: bool,
     event_source: Option<String>,
+}
+
+/// A session document without the account it belongs to, for the cache.
+#[derive(Clone)]
+struct SessionData {
+    api: Url,
+    download: String,
+    upload: String,
+    max_upload: u64,
+    id: String,
+    submission: bool,
+    event_source: Option<String>,
+}
+
+fn sessions() -> &'static Mutex<HashMap<u64, (Instant, SessionData)>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<u64, (Instant, SessionData)>>> = OnceLock::new();
+    SESSIONS.get_or_init(Mutex::default)
 }
 impl JmapAccount {
     fn authorize(&self, request: RequestBuilder) -> RequestBuilder {
@@ -145,25 +187,53 @@ impl JmapAccount {
             .map_err(|_| Error::Invalid("Invalid sender address".into()))?;
         Ok(())
     }
-    fn session(&self) -> Result<Session<'_>, Error> {
+    /// Identifies this login in the session cache; any change to it means a fresh session.
+    fn cache_key(&self) -> u64 {
+        static STATE: OnceLock<std::collections::hash_map::RandomState> = OnceLock::new();
+        use std::hash::BuildHasher;
+        STATE.get_or_init(Default::default).hash_one((
+            &self.session_url,
+            &self.token,
+            &self.username,
+        ))
+    }
+    fn with_data(&self, client: Client, data: SessionData) -> Session<'_> {
+        Session {
+            account: self,
+            client,
+            api: data.api,
+            download: data.download,
+            upload: data.upload,
+            max_upload: data.max_upload,
+            id: data.id,
+            submission: data.submission,
+            event_source: data.event_source,
+        }
+    }
+    async fn session(&self) -> Result<Session<'_>, Error> {
         self.validate()?;
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(same_host_redirects())
-            .build()
-            .map_err(|_| failed())?;
+        let client = client()?;
+        let key = self.cache_key();
+        let cached = sessions()
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned())
+            .filter(|(at, _)| at.elapsed() < SESSION_TTL);
+        if let Some((_, data)) = cached {
+            return Ok(self.with_data(client, data));
+        }
         let data = decode(
             self.authorize(client.get(self.session_resource()?))
                 .send()
+                .await
                 .map_err(http_error)?,
-        )?;
+        )
+        .await?;
         let id = field(&data["primaryAccounts"], MAIL)?.to_owned();
         if !data["accounts"][&id]["accountCapabilities"][MAIL].is_object() {
             return Err(failed());
         }
-        Ok(Session {
-            account: self,
-            client,
+        let data = SessionData {
             api: secure_url(field(&data, "apiUrl")?)?,
             download: data["downloadUrl"].as_str().unwrap_or_default().to_owned(),
             upload: data["uploadUrl"].as_str().unwrap_or_default().to_owned(),
@@ -173,16 +243,45 @@ impl JmapAccount {
             submission: data["accounts"][&id]["accountCapabilities"][SUBMISSION].is_object(),
             event_source: data["eventSourceUrl"].as_str().map(str::to_owned),
             id,
+        };
+        if let Ok(mut cache) = sessions().lock() {
+            cache.insert(key, (Instant::now(), data.clone()));
+        }
+        Ok(self.with_data(client, data))
+    }
+    /// Run `run` on a session; a failure drops the cached session so the next try starts fresh.
+    fn with_session<R>(
+        &self,
+        run: impl AsyncFnOnce(&Session<'_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        crate::net::block_on(async {
+            let session = self.session().await?;
+            let result = run(&session).await;
+            if result.is_err()
+                && let Ok(mut cache) = sessions().lock()
+            {
+                cache.remove(&self.cache_key());
+            }
+            result
         })
     }
     /// JMAP push (RFC 8620 §7.3): block until the account's Email state moves past the
     /// state seen on connect (`Ok(true)`), or until `timeout` passes (`Ok(false)`).
-    pub(crate) fn wait_for_change(&self, timeout: Duration) -> Result<bool, Error> {
-        let session = self.session()?;
+    pub(crate) async fn wait_for_change(&self, timeout: Duration) -> Result<bool, Error> {
+        let session = self.session().await?;
+        let result = self.wait_on(&session, timeout).await;
+        if result.is_err()
+            && let Ok(mut cache) = sessions().lock()
+        {
+            cache.remove(&self.cache_key());
+        }
+        result
+    }
+    async fn wait_on(&self, session: &Session<'_>, timeout: Duration) -> Result<bool, Error> {
         let template = session.event_source.as_deref().ok_or_else(|| {
             Error::Invalid("This JMAP server does not offer push notifications".into())
         })?;
-        let baseline = session.call("Email/get", json!({"ids":[]}))?["state"]
+        let baseline = session.call("Email/get", json!({"ids":[]})).await?["state"]
             .as_str()
             .ok_or_else(failed)?
             .to_owned();
@@ -192,50 +291,50 @@ impl JmapAccount {
                 .replace("{closeafter}", "no")
                 .replace("{ping}", "60"),
         )?;
-        let started = std::time::Instant::now();
-        let client = Client::builder()
+        let started = Instant::now();
+        let mut response = self
+            .authorize(session.client.get(url))
             .timeout(timeout)
-            .redirect(same_host_redirects())
-            .build()
-            .map_err(|_| failed())?;
-        let response = self
-            .authorize(client.get(url))
             .header("Accept", "text/event-stream")
             .send()
+            .await
             .map_err(http_error)?;
         if !response.status().is_success() {
             return Err(failed());
         }
-        let mut reader = std::io::BufReader::new(response);
+        let mut pending: Vec<u8> = Vec::new();
         let mut data = String::new();
         loop {
-            let mut line = Vec::new();
-            let read = std::io::BufRead::read_until(
-                &mut std::io::Read::take(&mut reader, 65_537),
-                b'\n',
-                &mut line,
-            );
-            match read {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
                 // The request deadline ends a quiet stream; anything earlier is a dropped connection.
-                Err(_) | Ok(0) if started.elapsed() + Duration::from_secs(1) >= timeout => {
+                Err(_) | Ok(None) if started.elapsed() + Duration::from_secs(1) >= timeout => {
                     return Ok(false);
                 }
-                Err(_) | Ok(0) => return Err(failed()),
-                Ok(count) if count > 65_536 => return Err(failed()),
-                Ok(_) => {}
-            }
-            let line = String::from_utf8_lossy(&line);
-            let line = line.trim_end_matches(['\r', '\n']);
-            if line.is_empty() {
-                if email_state(&data, &session.id).is_some_and(|state| state != baseline) {
-                    return Ok(true);
-                }
-                data.clear();
-            } else if let Some(value) = line.strip_prefix("data:") {
-                if data.len() + value.len() > 65_536 {
+                Err(_) | Ok(None) => return Err(failed()),
+            };
+            pending.extend_from_slice(&chunk);
+            while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+                let line: Vec<u8> = pending.drain(..=end).collect();
+                if line.len() > 65_536 {
                     return Err(failed());
                 }
-                data.push_str(value.trim_start());
+                let line = String::from_utf8_lossy(&line);
+                let line = line.trim_end_matches(['\r', '\n']);
+                if line.is_empty() {
+                    if email_state(&data, &session.id).is_some_and(|state| state != baseline) {
+                        return Ok(true);
+                    }
+                    data.clear();
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    if data.len() + value.len() > 65_536 {
+                        return Err(failed());
+                    }
+                    data.push_str(value.trim_start());
+                }
+            }
+            if pending.len() > 65_536 {
+                return Err(failed());
             }
         }
     }
@@ -248,66 +347,85 @@ impl JmapAccount {
         trash: Option<&str>,
         delete: bool,
     ) -> Result<(), Error> {
-        let session = self.session()?;
-        let mut update = serde_json::Map::new();
-        let mut destroy = Vec::new();
-        for id in ids {
-            let id = id
-                .strip_prefix("jmap-")
-                .filter(|id| !id.is_empty())
-                .ok_or_else(|| Error::Invalid("Invalid JMAP message id".into()))?;
-            let mut patch = json!({});
-            for (value, key) in [(seen, "keywords/$seen"), (flagged, "keywords/$flagged")] {
-                if let Some(value) = value {
-                    patch[key] = if value { json!(true) } else { Value::Null };
-                }
-            }
-            let mut target = destination;
-            if delete {
-                let data = session.call(
-                    "Email/get",
-                    json!({"ids":[id],"properties":["id","mailboxIds"]}),
-                )?;
-                let email = list(&data)?.first().ok_or(Error::Missing)?;
-                target = trash.filter(|trash| email["mailboxIds"][*trash] != true);
-                if target.is_none() {
-                    destroy.push(id);
-                    continue;
-                }
-            }
-            if let Some(target) = target {
-                patch["mailboxIds"] = json!({target:true});
-            }
-            update.insert(id.into(), patch);
-        }
-        let result = session.call("Email/set", json!({"update":update,"destroy":destroy}))?;
-        if result["notUpdated"]
-            .as_object()
-            .is_some_and(|v| !v.is_empty())
-            || result["notDestroyed"]
-                .as_object()
-                .is_some_and(|v| !v.is_empty())
-        {
-            return Err(failed());
-        }
-        if update.keys().any(|id| {
-            !result["updated"]
-                .as_object()
-                .is_some_and(|updated| updated.contains_key(id))
-        }) || destroy.iter().any(|id| {
-            !result["destroyed"]
-                .as_array()
-                .is_some_and(|destroyed| destroyed.iter().any(|value| value.as_str() == Some(id)))
-        }) {
-            return Err(failed());
-        }
-        Ok(())
+        self.with_session(async |session| {
+            organize_on(session, ids, seen, flagged, destination, trash, delete).await
+        })
     }
 
     pub fn folders(&self) -> Result<Vec<Folder>, Error> {
-        self.session()?.folders()
+        self.with_session(async |session| session.folders().await)
     }
+}
 
+async fn organize_on(
+    session: &Session<'_>,
+    ids: &[String],
+    seen: Option<bool>,
+    flagged: Option<bool>,
+    destination: Option<&str>,
+    trash: Option<&str>,
+    delete: bool,
+) -> Result<(), Error> {
+    let mut update = serde_json::Map::new();
+    let mut destroy = Vec::new();
+    for id in ids {
+        let id = id
+            .strip_prefix("jmap-")
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| Error::Invalid("Invalid JMAP message id".into()))?;
+        let mut patch = json!({});
+        for (value, key) in [(seen, "keywords/$seen"), (flagged, "keywords/$flagged")] {
+            if let Some(value) = value {
+                patch[key] = if value { json!(true) } else { Value::Null };
+            }
+        }
+        let mut target = destination;
+        if delete {
+            let data = session
+                .call(
+                    "Email/get",
+                    json!({"ids":[id],"properties":["id","mailboxIds"]}),
+                )
+                .await?;
+            let email = list(&data)?.first().ok_or(Error::Missing)?;
+            target = trash.filter(|trash| email["mailboxIds"][*trash] != true);
+            if target.is_none() {
+                destroy.push(id);
+                continue;
+            }
+        }
+        if let Some(target) = target {
+            patch["mailboxIds"] = json!({target:true});
+        }
+        update.insert(id.into(), patch);
+    }
+    let result = session
+        .call("Email/set", json!({"update":update,"destroy":destroy}))
+        .await?;
+    if result["notUpdated"]
+        .as_object()
+        .is_some_and(|v| !v.is_empty())
+        || result["notDestroyed"]
+            .as_object()
+            .is_some_and(|v| !v.is_empty())
+    {
+        return Err(failed());
+    }
+    if update.keys().any(|id| {
+        !result["updated"]
+            .as_object()
+            .is_some_and(|updated| updated.contains_key(id))
+    }) || destroy.iter().any(|id| {
+        !result["destroyed"]
+            .as_array()
+            .is_some_and(|destroyed| destroyed.iter().any(|value| value.as_str() == Some(id)))
+    }) {
+        return Err(failed());
+    }
+    Ok(())
+}
+
+impl JmapAccount {
     pub fn query(&self, folder: &str, search: &str) -> Result<Vec<Message>, Error> {
         self.query_page(folder, search, 0)
     }
@@ -331,23 +449,26 @@ impl JmapAccount {
         crate::validate_query(folder, search)?;
         crate::validate_offset(offset)?;
         crate::validate_limit(limit)?;
-        self.session()?.query(folder, search, offset, limit)
+        self.with_session(async |session| session.query(folder, search, offset, limit).await)
     }
     /// Download one complete message as RFC 5322 bytes.
     pub(crate) fn fetch_raw(&self, id: &str) -> Result<Vec<u8>, Error> {
         let id = id.strip_prefix("jmap-").ok_or(Error::Missing)?;
-        let session = self.session()?;
-        let data = session.call(
-            "Email/get",
-            json!({"ids":[id],"properties":["blobId","size"]}),
-        )?;
-        let email = list(&data)?.first().ok_or(Error::Missing)?;
-        if email["size"].as_u64().unwrap_or(u64::MAX) > crate::mime::MAX_RAW as u64 {
-            return Err(Error::Invalid(
-                "This message is larger than 30 MB and cannot be opened here".into(),
-            ));
-        }
-        session.download(field(email, "blobId")?)
+        self.with_session(async |session| {
+            let data = session
+                .call(
+                    "Email/get",
+                    json!({"ids":[id],"properties":["blobId","size"]}),
+                )
+                .await?;
+            let email = list(&data)?.first().ok_or(Error::Missing)?;
+            if email["size"].as_u64().unwrap_or(u64::MAX) > crate::mime::MAX_RAW as u64 {
+                return Err(Error::Invalid(
+                    "This message is larger than 30 MB and cannot be opened here".into(),
+                ));
+            }
+            session.download(field(email, "blobId")?).await
+        })
     }
     /// Download several messages from one session with at most three downloads at a time.
     /// Messages over `max_size` bytes are skipped.
@@ -364,45 +485,35 @@ impl JmapAccount {
         if wanted.is_empty() {
             return Ok(());
         }
-        let session = self.session()?;
-        let data = session.call(
-            "Email/get",
-            json!({"ids":wanted,"properties":["id","blobId","size"]}),
-        )?;
-        let emails = list(&data)?;
-        // Keep the caller's order (newest first) so likely reads arrive first.
-        let blobs: Vec<(String, String)> = wanted
-            .iter()
-            .filter_map(|id| {
-                let email = emails.iter().find(|email| email["id"] == *id)?;
-                if email["size"].as_u64()? > max_size as u64 {
-                    return None;
-                }
-                Some((format!("jmap-{id}"), email["blobId"].as_str()?.to_owned()))
-            })
-            .collect();
-        let queue = std::sync::Mutex::new(blobs.into_iter());
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::scope(|scope| {
-            for _ in 0..3 {
-                let sender = sender.clone();
-                let (queue, session) = (&queue, &session);
-                scope.spawn(move || {
-                    while let Some((id, blob)) = queue.lock().ok().and_then(|mut q| q.next()) {
-                        if sender.send((id, session.download(&blob))).is_err() {
-                            return;
-                        }
+        self.with_session(async |session| {
+            let data = session
+                .call(
+                    "Email/get",
+                    json!({"ids":wanted,"properties":["id","blobId","size"]}),
+                )
+                .await?;
+            let emails = list(&data)?;
+            // Keep the caller's order (newest first) so likely reads arrive first.
+            let blobs: Vec<(String, String)> = wanted
+                .iter()
+                .filter_map(|id| {
+                    let email = emails.iter().find(|email| email["id"] == *id)?;
+                    if email["size"].as_u64()? > max_size as u64 {
+                        return None;
                     }
-                });
-            }
-            drop(sender);
-            for (id, raw) in receiver {
+                    Some((format!("jmap-{id}"), email["blobId"].as_str()?.to_owned()))
+                })
+                .collect();
+            let mut downloads = stream::iter(blobs)
+                .map(|(id, blob)| async move { (id, session.download(&blob).await) })
+                .buffer_unordered(3);
+            while let Some((id, raw)) = downloads.next().await {
                 if let Ok(raw) = raw {
                     found(id, raw);
                 }
             }
-        });
-        Ok(())
+            Ok(())
+        })
     }
     pub(crate) fn send(&self, input: &DraftInput, attachments: &[Attachment]) -> Result<(), Error> {
         self.send_inner(input, attachments).map_err(|error| match error {
@@ -412,6 +523,14 @@ impl JmapAccount {
     }
     fn send_inner(&self, input: &DraftInput, attachments: &[Attachment]) -> Result<(), Error> {
         self.validate()?;
+        self.with_session(async |session| self.submit(session, input, attachments).await)
+    }
+    async fn submit(
+        &self,
+        session: &Session<'_>,
+        input: &DraftInput,
+        attachments: &[Attachment],
+    ) -> Result<(), Error> {
         crate::validate_draft(input)?;
         let addresses = |list: &str| -> Result<Vec<Value>, Error> {
             Ok(crate::mailboxes(list)?
@@ -441,37 +560,35 @@ impl JmapAccount {
         if !references.is_empty() {
             email["references"] = json!(references);
         }
-        let session = self.session()?;
         if !session.submission {
             return Err(Error::Invalid(
                 "JMAP account does not support sending".into(),
             ));
         }
         if !attachments.is_empty() {
-            email["attachments"] = attachments
-                .iter()
-                .map(|file| {
-                    Ok(
-                        json!({"blobId": session.upload(file)?, "type": file.content_type,
-                        "name": file.name, "disposition": "attachment"}),
-                    )
-                })
-                .collect::<Result<Vec<_>, Error>>()?
-                .into();
+            let mut uploaded = Vec::new();
+            for file in attachments {
+                uploaded.push(
+                    json!({"blobId": session.upload(file).await?, "type": file.content_type,
+                    "name": file.name, "disposition": "attachment"}),
+                );
+            }
+            email["attachments"] = uploaded.into();
         }
-        let identities = session.call("Identity/get", json!({}))?;
+        let identities = session.call("Identity/get", json!({})).await?;
         let identity = identity_for(list(&identities)?, &self.address).ok_or_else(|| {
             Error::Invalid(
                 "This JMAP account has no sending identity for your email address".into(),
             )
         })?;
-        let drafts = session.mailbox("drafts")?;
-        let sent = session.mailbox("sent")?;
+        let drafts = session.mailbox("drafts").await?;
+        let sent = session.mailbox("sent").await?;
         email["mailboxIds"] = json!({(drafts.clone()): true});
         email["keywords"] = json!({"$draft": true, "$seen": true});
         // Pipeline Email/set and EmailSubmission/set in one request via creation-id reference
         // so a dropped connection cannot leave an orphan draft behind.
-        let results = session.calls(&[
+        let results = session
+            .calls(&[
             ("Email/set", json!({"create":{"message":email}})),
             (
                 "EmailSubmission/set",
@@ -482,20 +599,23 @@ impl JmapAccount {
                     }}
                 }),
             ),
-        ])?;
+        ])
+            .await?;
         created_id(&results[0], "message")?;
         created_id(&results[1], "submission")?;
         Ok(())
     }
 }
 impl Session<'_> {
-    fn folders(&self) -> Result<Vec<Folder>, Error> {
-        let data = self.call(
-            "Mailbox/get",
-            json!({
-                "properties":["id","name","role","totalEmails","unreadEmails"]
-            }),
-        )?;
+    async fn folders(&self) -> Result<Vec<Folder>, Error> {
+        let data = self
+            .call(
+                "Mailbox/get",
+                json!({
+                    "properties":["id","name","role","totalEmails","unreadEmails"]
+                }),
+            )
+            .await?;
         list(&data)?
             .iter()
             .map(|mailbox| {
@@ -517,7 +637,7 @@ impl Session<'_> {
             .collect()
     }
 
-    fn query(
+    async fn query(
         &self,
         folder: &str,
         search: &str,
@@ -526,7 +646,7 @@ impl Session<'_> {
     ) -> Result<Vec<Message>, Error> {
         // `inbox` and `sent` are roles; anything else is a mailbox id from `folders()`.
         let mailbox = match folder {
-            "inbox" | "sent" => self.mailbox(folder)?,
+            "inbox" | "sent" => self.mailbox(folder).await?,
             other => other.to_owned(),
         };
         // Conditions in one object all apply; a repeated one (two `from:`) needs an explicit AND.
@@ -555,7 +675,8 @@ impl Session<'_> {
             }
         }
         // One page per request; Email/get takes the ids straight from the query's result.
-        let results = self.calls(&[
+        let results = self
+            .calls(&[
             (
                 "Email/query",
                 json!({"filter":filter,
@@ -567,7 +688,8 @@ impl Session<'_> {
                 "properties":["id","threadId","from","subject","receivedAt","textBody","bodyValues","keywords"],
                 "fetchTextBodyValues":true,"maxBodyValueBytes":100000}),
             ),
-        ])?;
+        ])
+            .await?;
         let ids = results[0]["ids"].as_array().ok_or_else(failed)?;
         let messages = list(&results[1])?;
         Ok(ids
@@ -588,11 +710,11 @@ impl Session<'_> {
             .collect())
     }
 
-    fn call(&self, method: &str, args: Value) -> Result<Value, Error> {
-        Ok(self.calls(&[(method, args)])?.remove(0))
+    async fn call(&self, method: &str, args: Value) -> Result<Value, Error> {
+        Ok(self.calls(&[(method, args)]).await?.remove(0))
     }
     /// Send several method calls in one request; call ids are their positions.
-    fn calls(&self, calls: &[(&str, Value)]) -> Result<Vec<Value>, Error> {
+    async fn calls(&self, calls: &[(&str, Value)]) -> Result<Vec<Value>, Error> {
         let mut using = vec![CORE, MAIL];
         if calls.iter().any(|(method, _)| {
             method.starts_with("Identity/") || method.starts_with("EmailSubmission/")
@@ -613,8 +735,10 @@ impl Session<'_> {
                 .authorize(self.client.post(self.api.clone()))
                 .json(&json!({"using":using,"methodCalls":method_calls}))
                 .send()
+                .await
                 .map_err(http_error)?,
-        )?;
+        )
+        .await?;
         calls
             .iter()
             .enumerate()
@@ -622,7 +746,7 @@ impl Session<'_> {
             .collect()
     }
     /// Download one blob as RFC 5322 bytes, bounded by the largest message Colecto opens.
-    fn download(&self, blob: &str) -> Result<Vec<u8>, Error> {
+    async fn download(&self, blob: &str) -> Result<Vec<u8>, Error> {
         // JMAP Ids are URL-safe; refuse anything else rather than escaping it into a URL.
         if [blob, self.id.as_str()].iter().any(|value| {
             value.is_empty()
@@ -642,22 +766,15 @@ impl Session<'_> {
             .account
             .authorize(self.client.get(secure_url(&url)?))
             .send()
+            .await
             .map_err(http_error)?;
         if !response.status().is_success() {
             return Err(failed());
         }
-        let mut bytes = Vec::new();
-        response
-            .take(crate::mime::MAX_RAW as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| failed())?;
-        if bytes.len() > crate::mime::MAX_RAW {
-            return Err(failed());
-        }
-        Ok(bytes)
+        read_limited(response, crate::mime::MAX_RAW).await
     }
     /// Upload one attachment and return its blob id (RFC 8620 §6.1).
-    fn upload(&self, file: &Attachment) -> Result<String, Error> {
+    async fn upload(&self, file: &Attachment) -> Result<String, Error> {
         if file.data.len() as u64 > self.max_upload {
             return Err(Error::Invalid(format!(
                 "{} is larger than this JMAP server accepts",
@@ -671,12 +788,16 @@ impl Session<'_> {
                 .header(reqwest::header::CONTENT_TYPE, &file.content_type)
                 .body(file.data.clone())
                 .send()
+                .await
                 .map_err(http_error)?,
-        )?;
+        )
+        .await?;
         Ok(field(&data, "blobId")?.to_owned())
     }
-    fn mailbox(&self, role: &str) -> Result<String, Error> {
-        let data = self.call("Mailbox/get", json!({"properties":["id","role"]}))?;
+    async fn mailbox(&self, role: &str) -> Result<String, Error> {
+        let data = self
+            .call("Mailbox/get", json!({"properties":["id","role"]}))
+            .await?;
         let mailbox = list(&data)?
             .iter()
             .find(|v| v["role"] == role)
@@ -811,6 +932,7 @@ impl Drop for JmapAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     #[test]
     fn creation_errors_do_not_echo_provider_text() {
         let error = created_id(&json!({"notCreated":{"x":{"type":"secret\ntext"}}}), "x")
@@ -913,9 +1035,9 @@ mod tests {
             submission: false,
             event_source: None,
         };
-        let messages = session
-            .query("sent", "needle", 0, crate::MAX_LIST_MESSAGES)
-            .unwrap();
+        let messages =
+            crate::net::block_on(session.query("sent", "needle", 0, crate::MAX_LIST_MESSAGES))
+                .unwrap();
         assert_eq!(
             messages
                 .iter()
@@ -923,7 +1045,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Newest", "Older"]
         );
-        let folders = session.folders().unwrap();
+        let folders = crate::net::block_on(session.folders()).unwrap();
         assert_eq!(folders[0].role, FolderRole::Inbox);
         assert_eq!((folders[0].total, folders[0].unread), (14, 3));
         assert_eq!(folders[1].id, "custom");
@@ -1004,8 +1126,7 @@ mod tests {
             submission: true,
             event_source: None,
         };
-        let error = session
-            .call("Identity/get", json!({}))
+        let error = crate::net::block_on(session.call("Identity/get", json!({})))
             .unwrap_err()
             .to_string();
         assert!(!error.contains("private server data"));

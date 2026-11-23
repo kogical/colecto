@@ -54,6 +54,7 @@ class _MessageListPaneState extends State<MessageListPane> {
   final _scroll = ScrollController();
   Timer? _debounce;
   String? _anchorId;
+  final _selectedRowKey = GlobalKey();
 
   MailController get c => widget.controller;
 
@@ -62,6 +63,7 @@ class _MessageListPaneState extends State<MessageListPane> {
     super.initState();
     _searchCtrl.text = c.searchQuery;
     c.addListener(_syncSearchQuery);
+    c.threadMenuRequests.addListener(_menuForSelection);
     _scroll.addListener(_maybeLoadMore);
   }
 
@@ -86,6 +88,7 @@ class _MessageListPaneState extends State<MessageListPane> {
 
   @override
   void dispose() {
+    c.threadMenuRequests.removeListener(_menuForSelection);
     c.removeListener(_syncSearchQuery);
     _scroll.removeListener(_maybeLoadMore);
     _debounce?.cancel();
@@ -538,9 +541,9 @@ class _MessageListPaneState extends State<MessageListPane> {
     final ids = t.messages.map((m) => m.id).toList(growable: false);
     final selected = t.messages.any((m) => m.id == c.selectedMessageId);
     final row = _MailRow(
-      key: ValueKey(t.id),
+      key: selected ? _selectedRowKey : ValueKey(t.id),
       sender: t.participants.join(', '),
-      hueKey: t.latest.address,
+      hueKey: t.latest.email,
       subject: t.subject,
       preview: t.latest.preview,
       date: when(t.latestDate).label,
@@ -557,17 +560,17 @@ class _MessageListPaneState extends State<MessageListPane> {
       hoverActions: [
         _HoverAction(
           LucideIcons.archive,
-          'Archive (E)',
+          'Archive (A)',
           () => c.organizeMessages('archive', ids: ids),
         ),
         _HoverAction(
           t.hasUnread ? LucideIcons.mailOpen : LucideIcons.mail,
-          t.hasUnread ? 'Mark as read' : 'Mark as unread (U)',
+          t.hasUnread ? 'Mark as read (U)' : 'Mark as unread (U)',
           () => c.organizeMessages('flags', ids: ids, seen: t.hasUnread),
         ),
         _HoverAction(
           LucideIcons.trash2,
-          'Move to Trash',
+          'Move to Trash (D)',
           () => c.organizeMessages('delete', ids: ids),
           danger: true,
         ),
@@ -582,7 +585,22 @@ class _MessageListPaneState extends State<MessageListPane> {
     );
   }
 
+  /// Opens the open conversation's menu from the keyboard, beside its row.
+  void _menuForSelection() {
+    final id = c.selectedMessageId;
+    final t = c.threads
+        .where((t) => t.messages.any((m) => m.id == id))
+        .firstOrNull;
+    if (t == null || !mounted) return;
+    final box =
+        (_selectedRowKey.currentContext ?? context).findRenderObject()
+            as RenderBox?;
+    if (box == null || !box.attached) return;
+    _threadMenu(box.localToGlobal(Offset(box.size.width / 2, 8)), t);
+  }
+
   void _threadMenu(Offset pos, ConversationThread t) {
+    final keys = !colectoTouch(context);
     final ids = t.messages.map((m) => m.id).toList(growable: false);
     // As in Colecto: up to eight labels, then the folders it can move to.
     final labels = (c.labels.keys.toList()..sort()).take(8).toList();
@@ -614,22 +632,21 @@ class _MessageListPaneState extends State<MessageListPane> {
               ? 'Deselect'
               : 'Select',
           icon: LucideIcons.squareCheck,
-          shortcut: colectoTouch(context)
-              ? null
-              : '${colectoModKey(context)}+Click',
+          shortcut: keys ? '${colectoModKey(context)}+Click' : null,
           onSelected: () => c.toggleBulkSelect(t.latest.id),
         ),
         const ColectoMenuItem.divider(),
         ColectoMenuItem(
           label: t.hasUnread ? 'Mark as read' : 'Mark as unread',
           icon: t.hasUnread ? LucideIcons.mailOpen : LucideIcons.mail,
+          shortcut: keys ? 'U' : null,
           onSelected: () =>
               c.organizeMessages('flags', ids: ids, seen: t.hasUnread),
         ),
         ColectoMenuItem(
           label: t.flagged ? 'Unstar' : 'Star',
           icon: LucideIcons.star,
-          shortcut: colectoTouch(context) ? null : 'S',
+          shortcut: keys ? 'S' : null,
           onSelected: () => c.organizeMessages(
             'flags',
             ids: [t.latest.id],
@@ -660,7 +677,7 @@ class _MessageListPaneState extends State<MessageListPane> {
           ColectoMenuItem(
             label: 'Archive',
             icon: LucideIcons.archive,
-            shortcut: colectoTouch(context) ? null : 'E',
+            shortcut: keys ? 'A' : null,
             onSelected: () => c.organizeMessages('archive', ids: ids),
           ),
         for (final f in moveTargets)
@@ -675,7 +692,7 @@ class _MessageListPaneState extends State<MessageListPane> {
           label: 'Move to Trash',
           icon: LucideIcons.trash2,
           danger: true,
-          shortcut: colectoTouch(context) ? null : 'Del',
+          shortcut: keys ? 'D' : null,
           onSelected: () => c.organizeMessages('delete', ids: ids),
         ),
       ],

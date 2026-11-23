@@ -311,6 +311,12 @@ jobs:
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
           export PATH="$HERE/usr/bin:$PATH"
+          # The background service unit runs `Colecto.AppImage --colecto-daemon`,
+          # since the mount path changes on every launch.
+          if [ "$1" = "--colecto-daemon" ]; then
+            shift
+            exec "$HERE/usr/bin/colecto-daemon" "$@"
+          fi
           exec "$HERE/usr/lib/colecto/colecto" "$@"
           EOF
               chmod +x "$appdir/AppRun"

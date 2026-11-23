@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:colecto/data/platform/background_service.dart';
 import 'package:colecto/data/repositories/remote_http_backend.dart';
 import 'package:colecto/domain/models/mail_models.dart';
 import 'package:colecto/domain/models/preferences_models.dart';
@@ -174,6 +175,80 @@ void main() {
     },
     skip: binary == null
         ? 'colecto-daemon binary not built (run `just build rust` or `just test e2e`)'
+        : false,
+  );
+
+  test(
+    'the background service: the app reaches colecto-daemon over its socket',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('colecto-sock-');
+      addTearDown(() => dir.delete(recursive: true));
+      final runtime = Directory('${dir.path}/run')..createSync();
+      await Process.run('chmod', ['700', runtime.path]);
+      final socket = '${runtime.path}/mail.sock';
+      final tokenFile = File('${dir.path}/mail-token')..writeAsStringSync('');
+      await Process.run('chmod', ['600', tokenFile.path]);
+      final token = 'a' * 64;
+      tokenFile.writeAsStringSync(token);
+
+      final env = Map<String, String>.from(Platform.environment)
+        ..removeWhere((k, _) => k.startsWith('COLECTO_'))
+        ..['COLECTO_DATA_DIR'] = '${dir.path}/data'
+        ..['COLECTO_SOCKET'] = socket
+        ..['COLECTO_TOKEN_FILE'] = tokenFile.path
+        ..['COLECTO_NOTIFICATIONS'] = 'off'
+        ..['COLECTO_UPDATE_CHECK'] = 'off';
+      final proc = await Process.start(
+        binary!,
+        const [],
+        environment: env,
+        includeParentEnvironment: false,
+      );
+      addTearDown(() async {
+        proc.kill();
+        await proc.exitCode.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            proc.kill(ProcessSignal.sigkill);
+            return -1;
+          },
+        );
+      });
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (!File(socket).existsSync() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+
+      final local = LocalMailService(socketPath: socket, token: token);
+      final backend = RemoteHttpBackend(
+        baseUrl: LocalMailService.baseUrl,
+        token: token,
+        streamClient: local.client,
+      );
+      addTearDown(backend.dispose);
+      expect((await backend.version()).api, 'v1');
+      expect(await backend.listAccounts(), isNotEmpty);
+
+      final ready = Completer<void>();
+      final sub = backend.events().listen((ev) {
+        if (ev is ReadyServiceEvent && !ready.isCompleted) ready.complete();
+      });
+      addTearDown(sub.cancel);
+      await ready.future.timeout(const Duration(seconds: 10));
+
+      final wrong = RemoteHttpBackend(
+        baseUrl: LocalMailService.baseUrl,
+        token: 'b' * 64,
+        streamClient: local.client,
+      );
+      addTearDown(wrong.dispose);
+      await expectLater(
+        wrong.listAccounts(),
+        throwsA(isA<MailBackendException>()),
+      );
+    },
+    skip: binary == null || !Platform.isLinux
+        ? 'colecto-daemon binary not built, or not Linux'
         : false,
   );
 }

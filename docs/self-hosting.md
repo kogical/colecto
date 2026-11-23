@@ -35,8 +35,8 @@ last command prints it; keep it somewhere safe, like a password manager.
 - **Browser:** open `https://mail.example.org` and paste the access token.
 - **Colecto app:** open **Settings → Servers**, enter `https://mail.example.org`,
   then paste the access token.
-- **Desktop notifications on Linux:** with the app connected to the server, install
-  the background service in **Settings → Connection**; it relays the server's
+- **Desktop notifications on Linux:** with the app connected to the server, turn on
+  **Settings → Connection → Keep running after closing**; it relays the server's
   notifications. See [desktop notifications](#desktop-notifications).
 
 Then add your mail accounts in **Settings → Accounts**.
@@ -288,9 +288,8 @@ COLECTO_TOKEN_FILE="$HOME/.config/colecto/access-token" \
 ./target/debug/colecto-daemon
 ```
 
-Settings → Connection writes these two settings into the unit itself while the app is
-connected to a remote server (see [below](#install-background-services-from-the-app)).
-The notifier reconnects with capped exponential backoff and reloads the token file on
+Settings → Connection writes these settings into its unit while the app is connected
+to an HTTPS server (see [below](#background-service-from-the-app-linux)). The notifier reconnects with capped exponential backoff and reloads the token file on
 reconnect. A failed notification (for example before the desktop session has
 started) is logged and does not drop the event stream. To decide whether a window is
 open, the Host counts open shell event streams (`POST /api/v1/extensions/events`) and
@@ -500,96 +499,68 @@ keys with `messages.list` can use `GET /api/v1/folders` for their allowed accoun
 Approval returns HTTP 429 when its account store is busy, without waiting while
 holding the account registry lock; retry after the mail operation finishes.
 
-## Install background services from the app
+## Background service from the app (Linux)
 
-Settings → Connection offers one background service on Linux when `systemctl --user`
-is available: `colecto-daemon.service`, the mail service with desktop notifications, or
-a relay of a remote server's notifications while the app is connected to one (see
-[desktop notifications](#desktop-notifications)). Switching servers changes the unit
-the app would write, so an installed service is offered as an update. Install starts
-the user unit; Start on login enables it. Stop leaves the unit installed; Uninstall disables, stops and removes it.
-Generated units live in `$XDG_CONFIG_HOME/systemd/user` (default
-`~/.config/systemd/user`). Colecto refuses to modify units without the exact
-`# Managed by Colecto` marker, including distribution-installed units without it.
-Generated units also say not to edit them, because Update rewrites them; settings go in
-`~/.config/colecto/daemon.env`.
-Commands run without a shell with a ten-second timeout; errors leave the current
-unit available for inspection and retry.
+Settings → Connection → *Background* has one switch, **Keep running after closing**,
+plus **Start on login**. The app writes, updates and removes one `systemd --user`
+unit, `colecto-daemon.service`, whose job follows the connection:
 
-### Unit versions and updates
-
-Each generated unit carries a `# Colecto-Version: X.Y.Z` line naming the Colecto that
-wrote it. `GET /api/v1/services` reports it as `version` (`null` for units written
-before versioning) and sets `update_to` to the app's version when the unit on disk
-differs from the one this app would write:
-
-| Installed unit | `update_to` |
+| Connection | What the unit runs |
 | --- | --- |
-| Same text as this app would write | `null` |
-| No version line, an older version, or a different executable path | this app's version |
-| Written by a newer Colecto | `null`, so an older app never downgrades it |
+| This device | The mail service: `colecto-daemon` owns this device's mail store, syncs it, shows desktop notifications, and serves the app on `%t/colecto/mail.sock` |
+| A server with an `https://` address | A [relay](#desktop-notifications) of that server's notifications (`COLECTO_RELAY_ORIGIN`) |
+| Demo mail, or a plain-HTTP server | Nothing: the unit is stopped and stays installed |
 
-Settings → Connection shows the version and an Update button when `update_to` is set.
-`POST /api/v1/services/daemon` with `{"action":"update"}` rewrites the
-unit (temporary file, then rename), runs `daemon-reload`, `reenable` when the unit was
-enabled (so a changed `WantedBy` target moves its link), then `try-restart`. A running
-service restarts on the new executable and briefly drops connections; a stopped one
-stays stopped. Updating a package replaces the binary but not a running process, which
-is why the version check compares the unit, not the executable.
+**One owner for the mail store.** The mail service uses the app's own data directory
+(`$COLECTO_DATA_DIR`, else `$XDG_DATA_HOME/com.kogical.colecto`), so it has the same
+accounts, drafts and keyring entries (credentials are keyed by that directory). The app
+never opens the store while the service owns it: with the switch on, it talks to the
+daemon over the Unix socket with `Host: localhost` and a bearer token; with it off, it
+opens the store in-process through FFI. Turning the switch on closes the in-process
+store (the FFI shutdown completes before the daemon starts); turning it off stops the
+daemon (`systemctl --user disable --now` returns once it has exited) before the app
+reopens the store. At startup, an installed mail service is started if needed and the
+app waits up to 10 s for its socket. If the socket never answers, the app stops the
+unit and opens the store itself, so the store is never open twice. Connecting to a
+server rewrites the unit as a relay for it; returning to this device rewrites it as the
+mail service.
 
-Install, Start and Update (of a running service) then check that the service stays up:
-systemd reports a start as successful even when the executable exits at once and
-`Restart=on-failure` loops forever. The Host polls `systemctl --user is-active`, and for
-the daemon also waits up to 10 s for its socket to accept a connection. A service that
-stops in that window fails the request with "The service did not start. Run `journalctl
---user -u colecto-….service` to see why."
+**Tokens.** The app generates a 64-character owner token for the mail service in
+`$XDG_STATE_HOME/colecto/mail-token` (default `~/.local/state/colecto`), and keeps a
+remote server's access token for the relay in `relay-token` beside it. Both are
+written `0600` in a `0700` directory, because the daemon refuses token files anyone
+else can read, and are deleted when the switch is turned off. The unit names the
+files, never the tokens. A token file is also what turns on the daemon's notifier: in
+socket mode it starts only when `COLECTO_TOKEN_FILE` is set.
 
-Units set `NoNewPrivileges=true`, except when the executable is an AppImage (detected by
-the `AI` magic bytes in its ELF header, since AppImage managers rename the file). An
-AppImage mounts itself through the setuid `fusermount` helper, which `NoNewPrivileges`
-disables: the runtime prints `open dir error: No such file or directory` and exits with
-status 127 on every start. A unit written with that line for an AppImage differs from
-what the app now writes, so Settings → Connection offers to update it.
+**Updates.** Each unit carries `# Managed by Colecto` and `# Colecto-Version: X.Y.Z`.
+At startup the app compares the installed unit with the one it would write and, when
+they differ, rewrites it (temporary file, then rename), runs `daemon-reload` and
+restarts the service, unless a newer Colecto wrote the unit, which it never
+downgrades. There is no Update button. Units the app did not write (no marker),
+symlinked units, and distribution-installed units are never touched; the switch is
+then unavailable with the reason. Settings go in `~/.config/colecto/daemon.env`, which
+the mail service unit reads.
 
-If the app starts while its background service is down, it shows "Can’t reach your
-mail" (`ui/src/ServiceUnavailable.svelte`) instead of the workspace. The screen retries
-every 4 s and opens the workspace once the service answers. It also offers whichever
-local control fits: Update the mail service (when `update_to` is set), Start it (when
-installed but not running), or switching the app back to its own built-in service.
+**AppImages.** An AppImage mounts itself at a new `/tmp/.mount_*` path on every launch,
+and that path disappears when the app quits. The unit therefore runs the image file
+itself (`$APPIMAGE --colecto-daemon`, which `AppRun` hands to the bundled daemon) and
+leaves out `NoNewPrivileges`, since the image mounts itself through the setuid
+`fusermount` helper. Keep the image at the same path. Other installs run the
+`colecto-daemon` next to the app, on `PATH`, or in `~/.local/bin`, `/usr/local/bin` or
+`/usr/bin`.
 
-The executable is `$APPIMAGE` when set, otherwise the running executable. The app
-supports `colecto daemon`, so installation does not require a separate daemon binary.
-Keep that executable at its installed location. The unit reads the optional
-environment file `~/.config/colecto/daemon.env` and starts with `default.target`. The
-mail service uses `%t/colecto/mail.sock`, a private runtime directory, and
-`%h/.local/state/colecto`. A relay unit names the app's `upstream-token` file
-instead, never the token itself.
-
-After installing the mail service, Settings → Connection fills in its address
-(`unix:/absolute/socket/path`) and waits for you to open it, because accounts and drafts
-on the background service are separate from the app's store.
-The local Host still serves UI assets and authenticates requests, then streams API
-bodies and SSE over the Unix socket with `Host: localhost` and the daemon's private
-owner bearer. Scoped keys cannot use this owner proxy. The bearer is read from its
-private token file and never returned to the browser. The choice persists in
-`upstream.json` in the app's data directory. `GET/PUT /api/v1/upstream` stays local and
-answers `{"upstream": {address, token_file} | null}`; PUT accepts `null` to restore the built-in service, `{address, token_file}` with
-an absolute `unix:` socket path and an absolute token path passing private-file
-checks, or `{address, token}` for a remote origin (see below). Service controls also stay local so a stopped daemon can be restarted.
-Both local control APIs require the owner bearer (never an API key). Remote Hosts and
-socket daemons refuse them; web clients cannot
-install units on a remote daemon. The Connection page hides unavailable controls.
+**Upgrading from 0.12.0 and earlier.** Those versions could install a mail service unit
+that used a separate, empty store under `~/.local/state/colecto` and had no token, plus
+a `colecto-notifications.service` relay that could not authenticate, so neither synced
+nor notified. At startup the app removes a Colecto-written
+`colecto-notifications.service` and rewrites the mail service unit as above. The old
+empty store is left in place.
 
 ### Connecting the desktop app to a remote daemon
 
-In the desktop app, Settings → Connection also accepts a daemon's `https://` origin
-(plain `http://` only for localhost) with its access token. The local Host checks the
-token with `POST /api/v1/session`, stores it in the private file `upstream-token` in the
-app's data directory (never in `upstream.json`, never returned), and then proxies owner
-requests to that origin the same way it proxies a socket: same routes, same SSE, with
-`Origin` set to the daemon's origin. Request bodies are capped at 40 MB and the daemon
-must answer within 30 seconds; responses stream through. The UI stays on the local
-origin, so its reader cache, cached-content warm-up and folder lists keep working on a
-slow link, while the daemon prefetches into its own content cache. A plain browser
-cannot hold the token for a proxy, so there the address still opens the daemon's own
-web UI.
+Settings → Connection → *Use another server* accepts a daemon's `https://` origin
+(plain `http://` only for localhost) and its access token. The app then talks to that
+daemon directly over HTTP and SSE (`RemoteHttpBackend`); nothing is proxied through
+this device, and its own mail store stays closed. With *Keep running after closing* on,
+the background unit relays that server's notifications, as above.

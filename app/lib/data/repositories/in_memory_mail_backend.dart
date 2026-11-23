@@ -84,7 +84,7 @@ class InMemoryMailBackend implements MailBackend {
           subject: 'Welcome to Colecto',
           body:
               'Colecto pairs the Rust mail core with a crisp native Flutter UI.\n\n'
-              'Try j/k to navigate, r to reply, e to archive, / to search, and Cmd/Ctrl+K for the command palette.',
+              'Try j/k to navigate, r to reply, a to archive, / to search, and Cmd/Ctrl+K for the command palette.',
           date: today1,
           seen: false,
           flagged: true,
@@ -239,12 +239,12 @@ class InMemoryMailBackend implements MailBackend {
       'm1': const MessageContent(
         text:
             'Colecto pairs the Rust mail core with a crisp native Flutter UI.\n\n'
-            'Try j/k to navigate, r to reply, e to archive, / to search, and Cmd/Ctrl+K for the command palette.\n\n'
+            'Try j/k to navigate, r to reply, a to archive, / to search, and Cmd/Ctrl+K for the command palette.\n\n'
             'Everything Colecto did is built in as first-party modules: multi-account IMAP/JMAP, autodiscovery, local labels, AI summaries & reply drafts, auto-labeling rules, API keys, MCP, and send approvals.',
         html:
             '<h2>Welcome to Colecto</h2>'
             '<p>Colecto pairs the <strong>Rust mail core</strong> with a crisp native Flutter UI.</p>'
-            '<p>Try <code>j/k</code> to navigate, <code>r</code> to reply, <code>e</code> to archive, <code>/</code> to search, and <code>Cmd/Ctrl+K</code> for the command palette.</p>'
+            '<p>Try <code>j/k</code> to navigate, <code>r</code> to reply, <code>a</code> to archive, <code>/</code> to search, and <code>Cmd/Ctrl+K</code> for the command palette.</p>'
             '<p><em>Remote images are blocked by default for privacy.</em></p>',
         blockedRemoteImages: 2,
         attachments: [

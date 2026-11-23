@@ -889,16 +889,13 @@ fn parse_message_or_fallback(raw: &[u8], id: String, validity: u32, uid: u32) ->
         Err(error) => {
             tracing::warn!(%error, uid, "Skipping unreadable IMAP message body");
             let headers = mailparse::parse_headers(raw).ok().map(|(h, _)| h);
-            let from = headers
-                .as_deref()
-                .and_then(|h| h.get_first_value("From"))
-                .unwrap_or_default();
+            let (sender, address) = headers.as_deref().map(from_mailbox).unwrap_or_default();
             Message {
                 seen: false,
                 flagged: false,
                 id,
-                sender: from.clone(),
-                address: from,
+                sender,
+                address,
                 subject: headers
                     .as_deref()
                     .and_then(|h| h.get_first_value("Subject"))
@@ -916,14 +913,14 @@ fn parse_message_or_fallback(raw: &[u8], id: String, validity: u32, uid: u32) ->
 
 fn parse_message(raw: &[u8], validity: u32, uid: u32) -> Result<Message, Error> {
     let mail = crate::mime::parse(raw)?;
-    let from = mail.headers.get_first_value("From").unwrap_or_default();
+    let (sender, address) = from_mailbox(&mail.headers);
     let body = crate::bounded_body(crate::mime::text(&mail)?);
     Ok(Message {
         seen: false,
         flagged: false,
         id: format!("imap-{validity}-{uid}"),
-        sender: from.clone(),
-        address: from,
+        sender,
+        address,
         subject: mail.headers.get_first_value("Subject").unwrap_or_default(),
         date: mail.headers.get_first_value("Date").unwrap_or_default(),
         thread: thread_of(&mail.headers),
@@ -937,6 +934,32 @@ fn parse_message(raw: &[u8], validity: u32, uid: u32) -> Result<Message, Error> 
 
 /// A conversation key from the headers replies carry (RFC 5322 §3.6.4): the first
 /// `References` id names the message that started it, which every reply keeps.
+/// The `From:` display name and bare address, so lists show `Ana Ruiz`
+/// rather than `"Ana Ruiz" <ana@example.com>`. Falls back to the raw value.
+fn from_mailbox(headers: &[mailparse::MailHeader]) -> (String, String) {
+    let Some(header) = headers.get_first_header("From") else {
+        return Default::default();
+    };
+    let first = mailparse::addrparse_header(header).ok().and_then(|list| {
+        match list.into_inner().into_iter().next()? {
+            mailparse::MailAddr::Single(info) => Some(info),
+            mailparse::MailAddr::Group(group) => group.addrs.into_iter().next(),
+        }
+    });
+    match first {
+        Some(info) => (
+            info.display_name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| info.addr.clone()),
+            info.addr,
+        ),
+        None => {
+            let raw = header.get_value();
+            (raw.clone(), raw)
+        }
+    }
+}
+
 fn thread_of(headers: &[mailparse::MailHeader]) -> String {
     let first_id = |name: &str| {
         let value = headers.get_first_value(name)?;
@@ -1199,6 +1222,8 @@ mod tests {
         let raw = b"From: Friend <friend@example.test>\r\nSubject: =?UTF-8?Q?Hello_=E4=B8=96=E7=95=8C?=\r\nContent-Type: multipart/alternative; boundary=x\r\n\r\n--x\r\nContent-Type: text/html\r\n\r\n<script>bad()</script>\r\n--x\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\nSGVsbG8=\r\n--x--\r\n";
         let message = parse_message(raw, 8, 12).unwrap();
         assert_eq!(message.id, "imap-8-12");
+        assert_eq!(message.sender, "Friend");
+        assert_eq!(message.address, "friend@example.test");
         assert_eq!(message.subject, "Hello 世界");
         assert_eq!(message.body, "Hello");
     }
@@ -1220,6 +1245,15 @@ mod tests {
         assert_eq!(fallback.id, "imap-9-42");
         assert_eq!(fallback.subject, "Corrupt");
         assert_eq!(fallback.sender, "alice@example.test");
+        assert_eq!(fallback.address, "alice@example.test");
+        let quoted = parse_message(
+            b"From: \"arcultus\" <notifications@github.com>\r\n\r\nHi",
+            1,
+            2,
+        )
+        .unwrap();
+        assert_eq!(quoted.sender, "arcultus");
+        assert_eq!(quoted.address, "notifications@github.com");
         assert_eq!(fallback.body, "This message could not be displayed.");
     }
     #[test]

@@ -427,21 +427,22 @@ class _ColectoMenuLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
     final padding = MediaQuery.paddingOf(context);
-    final estimated = math.min(
-      360.0,
-      items.fold<double>(
-        10,
-        (h, i) =>
-            h +
-            (i.divider
-                ? 9
-                : i.header
-                ? 26
-                : (i.subtitle != null ? 46 : 34)),
-      ),
+    // The whole menu when it fits: open toward the side with room for all of
+    // it (below first), else toward the roomier side and scroll the rest.
+    final estimated = items.fold<double>(
+      10,
+      (h, i) =>
+          h +
+          (i.divider
+              ? 9
+              : i.header
+              ? 26
+              : (i.subtitle != null ? 46 : 34)),
     );
-    final below =
-        anchor.bottom + 6 + estimated < screen.height - padding.bottom;
+    final roomBelow = screen.height - padding.bottom - 8 - (anchor.bottom + 6);
+    final roomAbove = anchor.top - 6 - padding.top - 8;
+    final below = estimated <= roomBelow || roomBelow >= roomAbove;
+    final maxHeight = math.max(120.0, below ? roomBelow : roomAbove);
     final top = below ? anchor.bottom + 6 : null;
     final bottom = below ? null : screen.height - anchor.top + 6;
     var left = alignRight ? anchor.right - width : anchor.left;
@@ -480,7 +481,7 @@ class _ColectoMenuLayout extends StatelessWidget {
                 ),
               );
             },
-            child: _ColectoMenuPanel(items: items),
+            child: _ColectoMenuPanel(items: items, maxHeight: maxHeight),
           ),
         ),
       ],
@@ -489,9 +490,10 @@ class _ColectoMenuLayout extends StatelessWidget {
 }
 
 class _ColectoMenuPanel extends StatefulWidget {
-  const _ColectoMenuPanel({required this.items});
+  const _ColectoMenuPanel({required this.items, required this.maxHeight});
 
   final List<ColectoMenuItem> items;
+  final double maxHeight;
 
   @override
   State<_ColectoMenuPanel> createState() => _ColectoMenuPanelState();
@@ -568,7 +570,7 @@ class _ColectoMenuPanelState extends State<_ColectoMenuPanel> {
       autofocus: true,
       onKeyEvent: _onKey,
       child: Container(
-        constraints: const BoxConstraints(maxHeight: 360),
+        constraints: BoxConstraints(maxHeight: widget.maxHeight),
         decoration: BoxDecoration(
           color: p.float,
           borderRadius: BorderRadius.circular(_panelRadius(context)),

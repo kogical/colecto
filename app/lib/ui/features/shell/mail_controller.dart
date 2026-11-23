@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../data/platform/background_service.dart';
 import '../../../data/platform/os_notify.dart';
 import '../../../data/repositories/in_memory_mail_backend.dart';
 import '../../../data/repositories/local_ffi_backend.dart';
@@ -98,31 +99,49 @@ class MailController extends ChangeNotifier {
     BackendKind initialKind = BackendKind.demo,
     String initialDaemonUrl = 'http://127.0.0.1:4173',
     String initialToken = '',
-  }) : _backend =
-           backend ??
-           _buildBackend(initialKind, initialDaemonUrl, initialToken),
-       _backendKind = initialKind,
+    this._background,
+  }) : _backendKind = initialKind,
        _daemonUrl = initialDaemonUrl,
-       _daemonToken = initialToken;
+       _daemonToken = initialToken {
+    _backend = backend ?? _newBackend();
+  }
 
-  static MailBackend _buildBackend(
-    BackendKind kind,
-    String daemonUrl,
-    String token,
-  ) {
-    return switch (kind) {
+  MailBackend _newBackend() {
+    final local = _localService;
+    return switch (_backendKind) {
       BackendKind.demo => InMemoryMailBackend(
         worstCase: InMemoryMailBackend.worstCaseDefine,
       ),
       BackendKind.remoteHttp => RemoteHttpBackend(
-        baseUrl: daemonUrl.trim(),
-        token: token.trim(),
+        baseUrl: _daemonUrl.trim(),
+        token: _daemonToken.trim(),
+      ),
+      BackendKind.localFfi when local != null => RemoteHttpBackend(
+        baseUrl: LocalMailService.baseUrl,
+        token: local.token,
+        streamClient: local.client,
+        label: 'Background service (${local.socketPath})',
       ),
       BackendKind.localFfi => LocalFfiBackend(),
     };
   }
 
-  MailBackend _backend;
+  /// Keeps Colecto running after the window closes; null where unavailable
+  /// (tests, and platforms other than Linux).
+  final BackgroundService? _background;
+  BackgroundService? get background =>
+      _background?.isAvailable == true ? _background : null;
+
+  /// Bumped to open the actions menu of the open conversation from the
+  /// keyboard (`.`, Shift+F10 or the Menu key); the message list listens.
+  final threadMenuRequests = ValueNotifier<int>(0);
+
+  /// Set while the background service owns this device's mail store.
+  LocalMailService? _localService;
+  bool get usesBackgroundService => _localService != null;
+  bool _backgroundFollowed = false;
+
+  late MailBackend _backend;
   BackendKind _backendKind;
   String _daemonUrl;
   String _daemonToken;
@@ -644,28 +663,129 @@ class MailController extends ChangeNotifier {
     String? daemonUrl,
     String? token,
   }) async {
-    await _eventSub?.cancel();
-    _backend.dispose();
+    await _closeBackend();
     _backendKind = kind;
     if (daemonUrl != null) _daemonUrl = daemonUrl.trim();
     if (token != null) _daemonToken = token.trim();
+    _backgroundFollowed = false;
+    await _reopen();
+  }
 
-    _backend = switch (kind) {
-      BackendKind.demo => InMemoryMailBackend(
-        worstCase: InMemoryMailBackend.worstCaseDefine,
-      ),
-      BackendKind.remoteHttp => RemoteHttpBackend(
-        baseUrl: _daemonUrl,
-        token: _daemonToken,
-      ),
-      BackendKind.localFfi => LocalFfiBackend(),
-    };
+  /// Releases the current backend; for the in-process store, waits until it
+  /// is closed so the background service may open it.
+  Future<void> _closeBackend() async {
+    await _eventSub?.cancel();
+    _eventSub = null;
+    final old = _backend;
+    if (old is LocalFfiBackend) {
+      await old.close();
+    } else {
+      old.dispose();
+    }
+    _localService = null;
+  }
+
+  Future<void> _reopen() async {
+    _backend = _newBackend();
     _contentCache.clear();
     _summaries.clear();
     _selectedMessageId = null;
     _conversation = const [];
     _authRequired = false;
     await initialize();
+  }
+
+  /// This device's mail: hands the store to the background service when it is
+  /// installed, before the app opens it. Runs before the first request.
+  Future<void> _attachLocalService() async {
+    final background = this.background;
+    if (background == null) return;
+    try {
+      final status = await background.status();
+      if (!status.installed) return;
+      final local = status.mode == BackgroundMode.mail
+          ? await background.connect()
+          : await background.enableMail(startOnLogin: status.startOnLogin);
+      if (local == null) return;
+      _backend.dispose();
+      _localService = local;
+      _backend = _newBackend();
+    } catch (e) {
+      showToast('Background service unavailable: $e', isError: true);
+    }
+  }
+
+  /// A remote server: points the background service at it, or pauses the
+  /// service when it cannot relay this connection.
+  Future<void> _followRemote() async {
+    final background = this.background;
+    if (background == null) return;
+    try {
+      final status = await background.status();
+      if (!status.installed) return;
+      final origin = relayOrigin;
+      if (origin == null || _daemonToken.isEmpty) {
+        await background.pause();
+      } else {
+        await background.enableRelay(
+          origin: origin,
+          token: _daemonToken,
+          startOnLogin: status.startOnLogin,
+        );
+      }
+    } catch (e) {
+      showToast('Background service unavailable: $e', isError: true);
+    }
+  }
+
+  /// The HTTPS origin a notification relay can follow, or null.
+  String? get relayOrigin {
+    final uri = Uri.tryParse(_daemonUrl);
+    if (_backendKind != BackendKind.remoteHttp ||
+        uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty) {
+      return null;
+    }
+    return uri.origin;
+  }
+
+  /// Turns the background service on or off for the current connection: this
+  /// device's mail moves between the app and the service, or a remote
+  /// server's notifications are relayed.
+  Future<void> setBackgroundService(
+    bool on, {
+    required bool startOnLogin,
+  }) async {
+    final background = this.background;
+    if (background == null) return;
+    if (_backendKind == BackendKind.remoteHttp) {
+      final origin = relayOrigin;
+      if (!on) return background.disable();
+      if (origin == null) {
+        throw StateError('Notifications need an HTTPS server.');
+      }
+      return background.enableRelay(
+        origin: origin,
+        token: _daemonToken,
+        startOnLogin: startOnLogin,
+      );
+    }
+    if (_backendKind != BackendKind.localFfi) return;
+    await _closeBackend();
+    Object? failure;
+    try {
+      if (on) {
+        _localService = await background.enableMail(startOnLogin: startOnLogin);
+      } else {
+        await background.disable();
+      }
+    } catch (e) {
+      failure = e;
+    }
+    _backgroundFollowed = true;
+    await _reopen();
+    if (failure != null) throw failure;
   }
 
   /// Forgets the daemon access token kept for this session and asks for it
@@ -689,6 +809,10 @@ class MailController extends ChangeNotifier {
     _loading = true;
     _error = null;
     notifyListeners();
+    if (!_backgroundFollowed && _backendKind == BackendKind.localFfi) {
+      _backgroundFollowed = true;
+      await _attachLocalService();
+    }
     try {
       _version = await _backend.version();
       _preferences = await _backend.getPreferences();
@@ -707,6 +831,10 @@ class MailController extends ChangeNotifier {
       _authRequired = false;
       if (_backendKind == BackendKind.remoteHttp && _daemonToken.isNotEmpty) {
         writeSessionToken(_daemonToken);
+        if (!_backgroundFollowed) {
+          _backgroundFollowed = true;
+          unawaited(_followRemote());
+        }
       }
       _subscribeEvents();
       await loadMailbox(refresh: false);
@@ -1319,6 +1447,20 @@ class MailController extends ChangeNotifier {
         flagged: flagged,
         folder: folder,
       );
+      if (action == 'flags') {
+        // The open conversation shows these flags too; a stale copy would
+        // make the next toggle (S, U) write the same value again.
+        final changed = ids.toSet();
+        _conversation = [
+          for (final t in _conversation)
+            changed.contains(t.message.id)
+                ? ThreadMessage(
+                    folder: t.folder,
+                    message: t.message.copyWith(seen: seen, flagged: flagged),
+                  )
+                : t,
+        ];
+      }
       if (action == 'archive' || action == 'delete' || action == 'move') {
         _forgetTabs(ids);
         if (ids.contains(_selectedMessageId)) {
@@ -1849,6 +1991,7 @@ class MailController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    threadMenuRequests.dispose();
     _heldToasts.clear();
     for (final timer in _toastTimers.values) {
       timer.cancel();

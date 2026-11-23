@@ -14,7 +14,10 @@ turso.workspace = true
 futures-executor.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-imap.workspace = true
+async-imap.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "io-util"] }
+tokio-native-tls.workspace = true
+futures-util.workspace = true
 native-tls.workspace = true
 lettre.workspace = true
 mailparse.workspace = true

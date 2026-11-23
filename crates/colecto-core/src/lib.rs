@@ -4,6 +4,7 @@ mod backup;
 mod cache;
 mod content;
 mod database;
+mod imap_io;
 pub use cache::{MailCacheStore, MailSnapshot, SnapshotHandle};
 pub use content::{MAX_CONTENT_BYTES, MAX_CONTENT_MESSAGES};
 pub use database::{APPLICATION_ID, Database, Row, SCHEMA_VERSION, Value};
@@ -160,6 +161,21 @@ impl MailReader {
             Account::Jmap(account) => account.fetch_many(&missing, MAX_PREFETCH_BYTES, &mut found),
         }?;
         Ok(done)
+    }
+}
+
+/// A folder listing prepared under the store lock and run without it.
+pub struct FolderJob {
+    account: Account,
+    key: String,
+}
+impl FolderJob {
+    /// Talk to the provider.
+    pub fn run(&self) -> Result<Vec<Folder>, Error> {
+        match &self.account {
+            Account::Imap(account) => account.folders(),
+            Account::Jmap(account) => account.folders(),
+        }
     }
 }
 
@@ -661,17 +677,39 @@ impl MailStore {
             })
             .collect());
         };
-        let key = self.account_key.as_ref().ok_or(Error::Missing)?;
-        let result = match account {
-            Account::Imap(account) => account.folders(),
-            Account::Jmap(account) => account.folders(),
+        let job = FolderJob {
+            account: account.clone(),
+            key: self.account_key.clone().ok_or(Error::Missing)?,
         };
+        let result = job.run();
+        self.finish_folders(&job, result)
+    }
+
+    /// Prepare a folder listing to run without this store's lock; `None` for the demo
+    /// account, which `folders` answers directly.
+    pub fn begin_folders(&self) -> Option<FolderJob> {
+        Some(FolderJob {
+            account: self.account.clone()?,
+            key: self.account_key.clone()?,
+        })
+    }
+
+    /// Keep a successful listing for offline use, or fall back to the last one kept.
+    pub fn finish_folders(
+        &self,
+        job: &FolderJob,
+        result: Result<Vec<Folder>, Error>,
+    ) -> Result<Vec<Folder>, Error> {
+        // The account changed while the listing ran; its folders belong to nobody now.
+        if self.account_key.as_deref() != Some(job.key.as_str()) {
+            return result;
+        }
         match result {
             Ok(folders) => {
                 self.database.set_record(
                     &self.namespace,
                     "folders",
-                    &serde_json::to_vec(&(key, &folders)).map_err(storage)?,
+                    &serde_json::to_vec(&(&job.key, &folders)).map_err(storage)?,
                 )?;
                 Ok(folders)
             }
@@ -679,7 +717,7 @@ impl MailStore {
                 if let Some(bytes) = self.database.get_record(&self.namespace, "folders")? {
                     let (provider, folders): (String, Vec<Folder>) =
                         serde_json::from_slice(&bytes).map_err(storage)?;
-                    if &provider == key {
+                    if provider == job.key {
                         return Ok(folders);
                     }
                 }

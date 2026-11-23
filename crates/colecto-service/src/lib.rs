@@ -247,7 +247,34 @@ impl MailService {
         account: &str,
     ) -> Result<Vec<Folder>, ServiceError> {
         authorize_inner(&self.inner, principal, account, Capability::MessagesList)?;
-        with_store(self.inner.clone(), account.to_owned(), |s| s.folders()).await
+        let (inner, account) = (self.inner.clone(), account.to_owned());
+        // The store lock is held only to prepare and to save the listing, never while
+        // talking to the provider, so opening a message never waits behind folder counts.
+        tokio::task::spawn_blocking(move || {
+            let store = inner
+                .accounts
+                .lock()
+                .map_err(|_| ServiceError::forbidden())?
+                .store(&account)
+                .map_err(|_| ServiceError::forbidden())?;
+            let unavailable = || ServiceError::internal("Mail store unavailable");
+            let job = store.lock().map_err(|_| unavailable())?.begin_folders();
+            let Some(job) = job else {
+                return store
+                    .lock()
+                    .map_err(|_| unavailable())?
+                    .folders()
+                    .map_err(ServiceError::from);
+            };
+            let result = job.run();
+            store
+                .lock()
+                .map_err(|_| unavailable())?
+                .finish_folders(&job, result)
+                .map_err(ServiceError::from)
+        })
+        .await
+        .map_err(|_| ServiceError::internal("Mail service unavailable"))?
     }
 
     pub async fn labels(

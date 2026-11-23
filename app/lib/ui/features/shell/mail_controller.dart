@@ -185,6 +185,9 @@ class MailController extends ChangeNotifier {
 
   // Mailbox state
   List<Folder> _folders = const [];
+
+  /// The account [_folders] belong to.
+  String? _foldersAccount;
   LabelMap _labels = const {};
   String _activeFolder = 'inbox';
   String? _activeLabel;
@@ -951,19 +954,28 @@ class MailController extends ChangeNotifier {
     _loadMoreError = null;
     _error = null;
     notifyListeners();
+    // Folder counts take one server round trip per folder, so they load alongside the
+    // message list instead of holding it up.
+    final pendingFolders = _backend.folders(account);
+    unawaited(_applyFolders(account, pendingFolders));
     try {
-      final folders = await _backend.folders(account);
-      if (epoch != _mailboxEpoch) return;
       final labels = await _backend.labels(account);
       if (epoch != _mailboxEpoch) return;
 
-      final isDrafts =
-          folder.toLowerCase() == 'drafts' ||
-          folders.any((f) => f.id == folder && f.role == FolderRole.drafts);
+      var isDrafts = folder.toLowerCase() == 'drafts';
+      if (!isDrafts && label == null && folder != 'inbox') {
+        // A provider's Drafts folder can have any name; its role says so.
+        final known = _foldersAccount == account
+            ? _folders
+            : await pendingFolders;
+        if (epoch != _mailboxEpoch) return;
+        isDrafts = known.any(
+          (f) => f.id == folder && f.role == FolderRole.drafts,
+        );
+      }
       if (isDrafts && label == null) {
         final drafts = await _backend.drafts(account);
         if (epoch != _mailboxEpoch) return;
-        _folders = folders;
         _labels = labels;
         _drafts = drafts;
         _messages = const [];
@@ -1004,7 +1016,6 @@ class MailController extends ChangeNotifier {
           }
         }
         if (epoch != _mailboxEpoch) return;
-        _folders = folders;
         _labels = labels;
         _messages = messages;
         _nextOffset = messages.length;
@@ -1033,6 +1044,21 @@ class MailController extends ChangeNotifier {
         _refreshing = false;
         notifyListeners();
       }
+    }
+  }
+
+  Future<void> _applyFolders(
+    String account,
+    Future<List<Folder>> pending,
+  ) async {
+    try {
+      final folders = await pending;
+      if (account != _activeAccount) return;
+      _folders = folders;
+      _foldersAccount = account;
+      notifyListeners();
+    } on MailBackendException catch (_) {
+      // The message list reports connection problems; keep the last folders.
     }
   }
 

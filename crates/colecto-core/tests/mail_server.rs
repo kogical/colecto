@@ -39,13 +39,26 @@ fn create_folder(user: &str, certificate: &str, name: &str) {
         .add_root_certificate(native_tls::Certificate::from_pem(certificate.as_bytes()).unwrap())
         .build()
         .unwrap();
-    let client = imap::connect(("localhost", IMAP_PORT), "localhost", &tls).unwrap();
-    let mut session = client
-        .login(format!("{user}@example.com"), "password")
-        .map_err(|(error, _)| error)
-        .unwrap();
-    session.create(name).unwrap();
-    session.logout().unwrap();
+    let tls = tokio_native_tls::TlsConnector::from(tls);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let socket = tokio::net::TcpStream::connect(("localhost", IMAP_PORT))
+                .await
+                .unwrap();
+            let stream = tls.connect("localhost", socket).await.unwrap();
+            let mut client = async_imap::Client::new(stream);
+            client.read_response().await.unwrap();
+            let mut session = client
+                .login(format!("{user}@example.com"), "password")
+                .await
+                .map_err(|(error, _)| error)
+                .unwrap();
+            session.create(name).await.unwrap();
+            session.logout().await.unwrap();
+        });
 }
 
 fn message(subject: &str) -> DraftInput {

@@ -1,9 +1,12 @@
 //! Single-account TLS mail transports. Credentials stay in the trusted core.
 use crate::{
     Error,
+    imap_io::{self, Deadline, Io, Session},
     mime::Attachment,
     types::{DraftInput, Folder, FolderRole, Message},
 };
+use async_imap::types::{Fetch, Flag, Name, NameAttribute};
+use futures_util::TryStreamExt;
 use lettre::{
     SmtpTransport, Transport,
     message::{MultiPart, SinglePart, header::ContentType},
@@ -13,10 +16,10 @@ use lettre::{
     },
 };
 use mailparse::MailHeaderMap;
-use std::{
-    net::{TcpStream, ToSocketAddrs},
-    time::Duration,
-};
+use std::time::Duration;
+
+/// A read or write that makes no progress for this long fails the operation.
+const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct MailAccount {
@@ -53,15 +56,16 @@ fn remote(_: impl std::fmt::Display) -> Error {
             .into(),
     )
 }
-fn imap_error(error: imap::error::Error) -> Error {
+fn imap_error(error: async_imap::error::Error) -> Error {
+    use async_imap::error::Error as Imap;
     let message = match error {
-        imap::error::Error::No(_) => {
+        Imap::No(_) => {
             "Mail server rejected the request (IMAP NO). Check mailbox access and account settings."
         }
-        imap::error::Error::Bad(_) => {
+        Imap::Bad(_) => {
             "Mail server rejected the request (IMAP BAD). Check server compatibility and settings."
         }
-        imap::error::Error::Io(ref error)
+        Imap::Io(ref error)
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
@@ -110,14 +114,43 @@ impl MailAccount {
         Ok(())
     }
 
-    fn with_session<R>(
+    /// Identifies this login for the session pool; any change to it means a new login.
+    fn pool_key(&self) -> u64 {
+        imap_io::pool_key((
+            &self.imap_host,
+            self.imap_port,
+            &self.username,
+            &self.password,
+            self.imap_starttls,
+            &self.tls_certificate,
+        ))
+    }
+
+    /// Run `run` on a pooled session (or a new one), and pool the session again when the
+    /// operation succeeded. A failed operation drops its session: its state is unknown.
+    async fn with_session<R>(
         &self,
-        run: impl FnOnce(&mut imap::Session<native_tls::TlsStream<TcpStream>>) -> Result<R, Error>,
+        run: impl AsyncFnOnce(&mut Session) -> Result<R, Error>,
     ) -> Result<R, Error> {
         self.validate()?;
-        let mut session = self.login()?;
-        let result = run(&mut session);
-        let _ = session.logout();
+        let key = self.pool_key();
+        let started = std::time::Instant::now();
+        let (mut session, reused) = match imap_io::checkout(key).await {
+            Some(session) => (session, true),
+            None => (self.login(IO_TIMEOUT).await?, false),
+        };
+        let ready = started.elapsed();
+        let result = run(&mut session).await;
+        tracing::debug!(
+            reused,
+            connect_ms = ready.as_millis() as u64,
+            total_ms = started.elapsed().as_millis() as u64,
+            ok = result.is_ok(),
+            "IMAP operation"
+        );
+        if result.is_ok() {
+            imap_io::checkin(key, session);
+        }
         result
     }
 
@@ -130,13 +163,13 @@ impl MailAccount {
         trash: Option<&str>,
         delete: bool,
     ) -> Result<(), Error> {
-        self.with_session(|session| {
-            organize_session(session, ids, seen, flagged, destination, trash, delete)
-        })
+        imap_io::block_on(self.with_session(async |session| {
+            organize_session(session, ids, seen, flagged, destination, trash, delete).await
+        }))
     }
 
     pub fn folders(&self) -> Result<Vec<Folder>, Error> {
-        self.with_session(folders_session)
+        imap_io::block_on(self.with_session(async |session| folders_session(session).await))
     }
 
     pub fn query(&self, folder: &str, search: &str) -> Result<Vec<Message>, Error> {
@@ -167,49 +200,58 @@ impl MailAccount {
         }
         builder.build().map_err(remote)
     }
-    fn login(&self) -> Result<imap::Session<native_tls::TlsStream<TcpStream>>, Error> {
-        let timeout = Duration::from_secs(30);
-        let addresses = (self.imap_host.as_str(), self.imap_port)
-            .to_socket_addrs()
+    /// Connect, secure and log in. `limit` bounds how long any read or write may stall.
+    async fn login(&self, limit: Duration) -> Result<Session, Error> {
+        let addresses = tokio::net::lookup_host((self.imap_host.as_str(), self.imap_port))
+            .await
             .map_err(remote)?;
         let mut socket = None;
         for address in addresses {
-            if let Ok(stream) = TcpStream::connect_timeout(&address, timeout) {
+            if let Ok(Ok(stream)) =
+                tokio::time::timeout(IO_TIMEOUT, tokio::net::TcpStream::connect(address)).await
+            {
                 socket = Some(stream);
                 break;
             }
         }
-        let socket = socket.ok_or_else(|| remote("connect"))?;
-        socket.set_read_timeout(Some(timeout)).map_err(remote)?;
-        socket.set_write_timeout(Some(timeout)).map_err(remote)?;
-        let tls = self.tls_connector()?;
+        let socket = Deadline::new(socket.ok_or_else(|| remote("connect"))?, limit);
+        let tls = tokio_native_tls::TlsConnector::from(self.tls_connector()?);
         let client = if self.imap_starttls {
-            let mut plain = imap::Client::new(socket);
-            plain.read_greeting().map_err(imap_error)?;
-            // `secure` fails unless the server accepts STARTTLS, so a refused or stripped
-            // upgrade ends the connection before any credential is sent in plain text.
-            plain.secure(&self.imap_host, &tls).map_err(|error| {
-                match error {
-                imap::error::Error::No(_) | imap::error::Error::Bad(_) => Error::Transport(
-                    "Mail server did not accept STARTTLS. Check the IMAP port and security setting."
-                        .into(),
-                ),
-                imap::error::Error::Tls(_) | imap::error::Error::TlsHandshake(_) => {
-                    tls_failed(())
-                }
-                error => imap_error(error),
-            }
-            })?
+            let mut plain = async_imap::Client::new(socket);
+            greeting(&mut plain).await?;
+            // A refused or stripped upgrade ends the connection before any credential is
+            // sent in plain text.
+            plain
+                .run_command_and_check_ok("STARTTLS", None)
+                .await
+                .map_err(|error| match error {
+                    async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_) => {
+                        Error::Transport(
+                            "Mail server did not accept STARTTLS. Check the IMAP port and security setting."
+                                .into(),
+                        )
+                    }
+                    error => imap_error(error),
+                })?;
+            let stream = tls
+                .connect(&self.imap_host, plain.into_inner())
+                .await
+                .map_err(tls_failed)?;
+            async_imap::Client::new(Box::new(stream) as Box<dyn Io>)
         } else {
-            let stream = tls.connect(&self.imap_host, socket).map_err(tls_failed)?;
-            let mut client = imap::Client::new(stream);
-            client.read_greeting().map_err(imap_error)?;
+            let stream = tls
+                .connect(&self.imap_host, socket)
+                .await
+                .map_err(tls_failed)?;
+            let mut client = async_imap::Client::new(Box::new(stream) as Box<dyn Io>);
+            greeting(&mut client).await?;
             client
         };
         client
             .login(&self.username, &self.password)
+            .await
             .map_err(|(error, _)| match error {
-                imap::error::Error::No(_) => Error::Transport(
+                async_imap::error::Error::No(_) => Error::Transport(
                     "Mail server rejected authentication. Check your username and password.".into(),
                 ),
                 error => imap_error(error),
@@ -229,9 +271,9 @@ impl MailAccount {
         crate::validate_query(folder, search)?;
         crate::validate_offset(offset)?;
         crate::validate_limit(limit)?;
-        self.with_session(|session| {
-            query_session_with_limit(session, folder, search, offset, limit, known, progress)
-        })
+        imap_io::block_on(self.with_session(async |session| {
+            query_session_with_limit(session, folder, search, offset, limit, known, progress).await
+        }))
     }
     pub(crate) fn query_with_identity(
         &self,
@@ -250,14 +292,24 @@ impl MailAccount {
     }
     /// IMAP IDLE (RFC 2177) on a read-only Inbox: `Ok(true)` when the server reports a change,
     /// `Ok(false)` when `timeout` passes quietly.
+    /// Runs on its own connection (never pooled): IDLE holds it for the whole wait.
     pub(crate) fn wait_for_inbox(&self, timeout: Duration) -> Result<bool, Error> {
-        self.with_session(|session| idle_session(session, timeout))
+        self.validate()?;
+        imap_io::block_on(async {
+            // The server may stay quiet for the whole wait, so reads may stall that long.
+            let session = self.login(timeout + IO_TIMEOUT).await?;
+            let (changed, mut session) = idle_session(session, timeout).await?;
+            let _ = session.logout().await;
+            Ok(changed)
+        })
     }
     /// Fetch one complete message by its Colecto ID without marking it seen.
     pub(crate) fn fetch_raw(&self, id: &str) -> Result<Vec<u8>, Error> {
         self.validate()?;
         let (name, validity, uid) = parse_id(id)?;
-        self.with_session(|session| fetch_session(session, &name, validity, uid))
+        imap_io::block_on(
+            self.with_session(async |session| fetch_session(session, &name, validity, uid).await),
+        )
     }
     /// Download several messages over one session in batched `UID FETCH` commands, without
     /// marking them seen. Messages over `max_size` bytes are skipped.
@@ -267,7 +319,11 @@ impl MailAccount {
         max_size: usize,
         found: &mut dyn FnMut(String, Vec<u8>),
     ) -> Result<(), Error> {
-        self.with_session(|session| fetch_many_session(session, ids, max_size, found))
+        imap_io::block_on(
+            self.with_session(async |session| {
+                fetch_many_session(session, ids, max_size, found).await
+            }),
+        )
     }
 
     fn build(
@@ -352,10 +408,7 @@ impl MailAccount {
         Ok(())
     }
     fn save_sent(&self, raw: &[u8]) -> Result<(), Error> {
-        let mut session = self.login()?;
-        let result = save_sent_session(&mut session, raw);
-        let _ = session.logout();
-        result
+        imap_io::block_on(self.with_session(async |session| save_sent_session(session, raw).await))
     }
 }
 
@@ -373,15 +426,78 @@ fn provider_saves_sent(imap_host: &str) -> bool {
     .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }
 
-fn save_sent_session<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
-    raw: &[u8],
-) -> Result<(), Error> {
-    let names = session.list(Some(""), Some("*")).map_err(imap_error)?;
+async fn save_sent_session(session: &mut Session, raw: &[u8]) -> Result<(), Error> {
+    let names = list_all(session).await?;
     let mailbox = sent_mailbox(&names)?;
     session
-        .append_with_flags(&mailbox, raw, &[imap::types::Flag::Seen])
+        .append(&mailbox, Some("(\\Seen)"), None, raw)
+        .await
         .map_err(imap_error)
+}
+
+/// The server greeting that opens every connection.
+async fn greeting<T: Io>(client: &mut async_imap::Client<T>) -> Result<(), Error> {
+    client
+        .read_response()
+        .await
+        .map_err(remote)?
+        .map(|_| ())
+        .ok_or_else(|| remote("closed"))
+}
+
+async fn list_all(session: &mut Session) -> Result<Vec<Name>, Error> {
+    session
+        .list(Some(""), Some("*"))
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)
+}
+
+async fn uid_fetch(session: &mut Session, uids: &str, query: &str) -> Result<Vec<Fetch>, Error> {
+    session
+        .uid_fetch(uids, query)
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)
+}
+
+async fn uid_store(session: &mut Session, uid: &str, query: &str) -> Result<(), Error> {
+    session
+        .uid_store(uid, query)
+        .await
+        .map_err(imap_error)?
+        .try_collect::<Vec<_>>()
+        .await
+        .map(|_| ())
+        .map_err(imap_error)
+}
+
+/// The special-use attributes (`\\Sent`, `\\All`, …) and extensions a mailbox carries,
+/// by their IMAP names.
+fn attribute_names(name: &Name) -> Vec<String> {
+    name.attributes()
+        .iter()
+        .filter_map(|attribute| {
+            Some(match attribute {
+                NameAttribute::All => "\\All".to_owned(),
+                NameAttribute::Archive => "\\Archive".to_owned(),
+                NameAttribute::Drafts => "\\Drafts".to_owned(),
+                NameAttribute::Junk => "\\Junk".to_owned(),
+                NameAttribute::Sent => "\\Sent".to_owned(),
+                NameAttribute::Trash => "\\Trash".to_owned(),
+                NameAttribute::Extension(value) => value.to_string(),
+                _ => return None,
+            })
+        })
+        .collect()
+}
+
+fn selectable(name: &Name) -> bool {
+    !name.attributes().contains(&NameAttribute::NoSelect)
 }
 
 /// IDs are `imap-{validity}-{uid}` for Inbox and `imap-{hex name}-{validity}-{uid}` otherwise.
@@ -412,19 +528,17 @@ fn parse_id(id: &str) -> Result<(String, u32, u32), Error> {
     Ok((name, parse(numbers.0)?, parse(numbers.1)?))
 }
 
-fn fetch_session<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
+async fn fetch_session(
+    session: &mut Session,
     name: &str,
     validity: u32,
     uid: u32,
 ) -> Result<Vec<u8>, Error> {
-    let mailbox = session.examine(name).map_err(imap_error)?;
+    let mailbox = session.examine(name).await.map_err(imap_error)?;
     if mailbox.uid_validity != Some(validity) {
         return Err(Error::Missing);
     }
-    let sizes = session
-        .uid_fetch(uid.to_string(), "(UID RFC822.SIZE)")
-        .map_err(imap_error)?;
+    let sizes = uid_fetch(session, &uid.to_string(), "(UID RFC822.SIZE)").await?;
     let size = sizes
         .iter()
         .find(|item| item.uid == Some(uid))
@@ -436,9 +550,7 @@ fn fetch_session<T: std::io::Read + std::io::Write>(
             "This message is larger than 30 MB and cannot be opened here".into(),
         ));
     }
-    let fetched = session
-        .uid_fetch(uid.to_string(), "(UID FLAGS BODY.PEEK[])")
-        .map_err(imap_error)?;
+    let fetched = uid_fetch(session, &uid.to_string(), "(UID FLAGS BODY.PEEK[])").await?;
     fetched
         .iter()
         .find_map(|item| item.body())
@@ -446,27 +558,34 @@ fn fetch_session<T: std::io::Read + std::io::Write>(
         .ok_or(Error::Missing)
 }
 
-fn idle_session<T>(session: &mut imap::Session<T>, timeout: Duration) -> Result<bool, Error>
-where
-    T: std::io::Read + std::io::Write + imap::extensions::idle::SetReadTimeout,
-{
-    if !session.capabilities().map_err(imap_error)?.has_str("IDLE") {
+/// IDLE on the Inbox. Returns whether the server reported a change, and the session once
+/// IDLE has ended cleanly.
+async fn idle_session(mut session: Session, timeout: Duration) -> Result<(bool, Session), Error> {
+    use async_imap::extensions::idle::IdleResponse;
+    if !session
+        .capabilities()
+        .await
+        .map_err(imap_error)?
+        .has_str("IDLE")
+    {
         return Err(Error::Invalid(
             "This IMAP server does not support IDLE".into(),
         ));
     }
-    session.examine("INBOX").map_err(imap_error)?;
-    let outcome = session
-        .idle()
-        .map_err(imap_error)?
-        .wait_with_timeout(timeout)
-        .map_err(imap_error)?;
-    Ok(outcome == imap::extensions::idle::WaitOutcome::MailboxChanged)
+    session.examine("INBOX").await.map_err(imap_error)?;
+    let mut idle = session.idle();
+    idle.init().await.map_err(imap_error)?;
+    let outcome = {
+        let (wait, _stop) = idle.wait_with_timeout(timeout);
+        wait.await.map_err(imap_error)?
+    };
+    let session = idle.done().await.map_err(imap_error)?;
+    Ok((matches!(outcome, IdleResponse::NewData(_)), session))
 }
 
 #[cfg(test)]
-fn query_session<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
+async fn query_session(
+    session: &mut Session,
     folder: &str,
     search: &str,
 ) -> Result<Vec<Message>, Error> {
@@ -478,6 +597,7 @@ fn query_session<T: std::io::Read + std::io::Write>(
         &Default::default(),
         &mut |_, _| {},
     )
+    .await
     .map(|listing| listing.messages)
 }
 
@@ -513,8 +633,8 @@ fn uid_set(uids: &[u32]) -> String {
 }
 
 #[cfg(test)]
-fn query_session_with_identity<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
+async fn query_session_with_identity(
+    session: &mut Session,
     folder: &str,
     search: &str,
     offset: usize,
@@ -530,10 +650,11 @@ fn query_session_with_identity<T: std::io::Read + std::io::Write>(
         known,
         progress,
     )
+    .await
 }
 
-fn query_session_with_limit<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
+async fn query_session_with_limit(
+    session: &mut Session,
     folder: &str,
     search: &str,
     offset: usize,
@@ -545,12 +666,12 @@ fn query_session_with_limit<T: std::io::Read + std::io::Write>(
     let name = match folder {
         "inbox" => "INBOX".to_owned(),
         "sent" => {
-            let names = session.list(Some(""), Some("*")).map_err(imap_error)?;
+            let names = list_all(session).await?;
             sent_mailbox(&names)?
         }
         other => other.to_owned(),
     };
-    let mailbox = session.examine(&name).map_err(imap_error)?;
+    let mailbox = session.examine(&name).await.map_err(imap_error)?;
     let validity = mailbox
         .uid_validity
         .ok_or_else(|| remote("Missing UIDVALIDITY"))?;
@@ -576,10 +697,15 @@ fn query_session_with_limit<T: std::io::Read + std::io::Write>(
         };
         session
             .fetch(&range, "(UID FLAGS RFC822.SIZE)")
+            .await
+            .map_err(imap_error)?
+            .try_collect::<Vec<_>>()
+            .await
             .map_err(imap_error)?
     } else {
         let mut ids: Vec<_> = session
             .uid_search(crate::search::Query::parse(search).imap())
+            .await
             .map_err(imap_error)?
             .into_iter()
             .collect();
@@ -588,9 +714,7 @@ fn query_session_with_limit<T: std::io::Read + std::io::Write>(
         if selected.is_empty() {
             return Ok(empty(identity));
         }
-        session
-            .uid_fetch(uid_set(&selected), "(UID FLAGS RFC822.SIZE)")
-            .map_err(imap_error)?
+        uid_fetch(session, &uid_set(&selected), "(UID FLAGS RFC822.SIZE)").await?
     };
     struct Entry {
         uid: u32,
@@ -607,8 +731,8 @@ fn query_session_with_limit<T: std::io::Read + std::io::Write>(
         entries.push(Entry {
             uid,
             size: header.size.unwrap_or(u32::MAX),
-            seen: header.flags().contains(&imap::types::Flag::Seen),
-            flagged: header.flags().contains(&imap::types::Flag::Flagged),
+            seen: header.flags().any(|flag| matches!(flag, Flag::Seen)),
+            flagged: header.flags().any(|flag| matches!(flag, Flag::Flagged)),
         });
     }
     let id_of = |uid: u32| format!("{identity}{uid}");
@@ -632,9 +756,7 @@ fn query_session_with_limit<T: std::io::Read + std::io::Write>(
     let mut fetched = std::collections::HashMap::new();
     let mut raws = Vec::new();
     for batch in batches(&small) {
-        let items = session
-            .uid_fetch(uid_set(&batch), "(UID BODY.PEEK[])")
-            .map_err(imap_error)?;
+        let items = uid_fetch(session, &uid_set(&batch), "(UID BODY.PEEK[])").await?;
         for item in items.iter() {
             let (Some(uid), Some(raw)) = (item.uid, item.body()) else {
                 continue;
@@ -651,9 +773,7 @@ fn query_session_with_limit<T: std::io::Read + std::io::Write>(
     }
     if !large.is_empty() {
         // Large messages list from headers only; the reader fetches them on demand.
-        let items = session
-            .uid_fetch(uid_set(&large), "(UID BODY.PEEK[HEADER])")
-            .map_err(imap_error)?;
+        let items = uid_fetch(session, &uid_set(&large), "(UID BODY.PEEK[HEADER])").await?;
         for item in items.iter() {
             let (Some(uid), Some(raw)) = (item.uid, item.header()) else {
                 continue;
@@ -692,8 +812,8 @@ fn mailbox_identity(name: &str, validity: u32) -> String {
     }
 }
 
-fn fetch_many_session<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
+async fn fetch_many_session(
+    session: &mut Session,
     ids: &[String],
     max_size: usize,
     found: &mut dyn FnMut(String, Vec<u8>),
@@ -712,14 +832,12 @@ fn fetch_many_session<T: std::io::Read + std::io::Write>(
         }
     }
     for (name, validity, uids) in mailboxes {
-        let mailbox = session.examine(&name).map_err(imap_error)?;
+        let mailbox = session.examine(&name).await.map_err(imap_error)?;
         if mailbox.uid_validity != Some(validity) {
             continue;
         }
         let prefix = mailbox_identity(&name, validity);
-        let sizes = session
-            .uid_fetch(uid_set(&uids), "(UID RFC822.SIZE)")
-            .map_err(imap_error)?;
+        let sizes = uid_fetch(session, &uid_set(&uids), "(UID RFC822.SIZE)").await?;
         // Keep the caller's order (newest first) so the most likely reads arrive first.
         let wanted: Vec<(u32, u32)> = uids
             .iter()
@@ -729,9 +847,7 @@ fn fetch_many_session<T: std::io::Read + std::io::Write>(
             })
             .collect();
         for batch in batches(&wanted) {
-            let items = session
-                .uid_fetch(uid_set(&batch), "(UID BODY.PEEK[])")
-                .map_err(imap_error)?;
+            let items = uid_fetch(session, &uid_set(&batch), "(UID BODY.PEEK[])").await?;
             for item in items.iter() {
                 if let (Some(uid), Some(raw)) = (item.uid, item.body())
                     && batch.contains(&uid)
@@ -744,15 +860,11 @@ fn fetch_many_session<T: std::io::Read + std::io::Write>(
     Ok(())
 }
 
-fn sent_mailbox(names: &[imap::types::Name]) -> Result<String, Error> {
-    let selectable = |name: &&imap::types::Name| {
-        !name
-            .attributes()
-            .contains(&imap::types::NameAttribute::NoSelect)
-    };
+fn sent_mailbox(names: &[Name]) -> Result<String, Error> {
+    let selectable = |name: &&Name| selectable(name);
     // Servers without SPECIAL-USE often nest folders under the Inbox (`INBOX.Sent`), so the
     // fallback compares the last part of the name.
-    let leaf = |name: &imap::types::Name| match name.delimiter() {
+    let leaf = |name: &Name| match name.delimiter() {
         Some(delimiter) if !delimiter.is_empty() => name
             .name()
             .rsplit(delimiter)
@@ -761,7 +873,7 @@ fn sent_mailbox(names: &[imap::types::Name]) -> Result<String, Error> {
             .to_owned(),
         _ => name.name().to_owned(),
     };
-    names.iter().filter(selectable).find(|name| name.attributes().iter().any(|attribute| matches!(attribute, imap::types::NameAttribute::Custom(value) if value.eq_ignore_ascii_case("\\Sent"))))
+    names.iter().filter(selectable).find(|name| name.attributes().contains(&NameAttribute::Sent))
         .or_else(|| names.iter().filter(selectable).find(|name| ["Sent", "Sent Items", "Sent Messages", "Sent Mail"].iter().any(|candidate| leaf(name).eq_ignore_ascii_case(candidate))))
         .map(|name| name.name().to_owned())
         .ok_or_else(|| Error::Invalid("The provider did not advertise a Sent mailbox and no standard Sent folder was found".into()))
@@ -847,6 +959,19 @@ impl Drop for MailAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Log in to a scripted plain-text server.
+    fn session_at(address: std::net::SocketAddr) -> Session {
+        imap_io::block_on(async {
+            let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            let mut client = async_imap::Client::new(Box::new(stream) as Box<dyn Io>);
+            greeting(&mut client).await.unwrap();
+            client
+                .login("me", "secret")
+                .await
+                .map_err(|(e, _)| e)
+                .unwrap()
+        })
+    }
     #[test]
     fn unicode_imap_ids_are_missing_without_panicking() {
         for id in ["imap-界a-7-42", "imap-éé-7-42", "imap-zz-7-42"] {
@@ -883,18 +1008,16 @@ mod tests {
                 write!(socket, "{response}{tag} OK complete\r\n").unwrap();
             }
         });
-        let mut client = imap::Client::new(TcpStream::connect(address).unwrap());
-        client.read_greeting().unwrap();
-        let mut session = client.login("me", "secret").unwrap();
+        let mut session = session_at(address);
         for (search, identity) in [("", "imap-7-"), ("needle", "imap-8-")] {
-            let result = query_session_with_identity(
+            let result = imap_io::block_on(query_session_with_identity(
                 &mut session,
                 "inbox",
                 search,
                 0,
                 &Default::default(),
                 &mut |_, _| {},
-            )
+            ))
             .unwrap();
             assert!(result.messages.is_empty());
             assert_eq!(result.identity.as_deref(), Some(identity));
@@ -905,10 +1028,13 @@ mod tests {
     fn server_status_errors_never_include_protocol_text() {
         for (error, expected) in [
             (
-                imap::error::Error::No("password=secret private mail".into()),
+                async_imap::error::Error::No("password=secret private mail".into()),
                 "IMAP NO",
             ),
-            (imap::error::Error::Bad("private mail".into()), "IMAP BAD"),
+            (
+                async_imap::error::Error::Bad("private mail".into()),
+                "IMAP BAD",
+            ),
         ] {
             let message = imap_error(error).to_string();
             assert!(message.contains(expected));
@@ -960,10 +1086,8 @@ mod tests {
                 write!(socket, "{response}{tag} OK complete\r\n").unwrap();
             }
         });
-        let mut client = imap::Client::new(TcpStream::connect(address).unwrap());
-        client.read_greeting().unwrap();
-        let mut session = client.login("me", "secret").unwrap();
-        let messages = query_session(&mut session, "sent", "needle").unwrap();
+        let mut session = session_at(address);
+        let messages = imap_io::block_on(query_session(&mut session, "sent", "needle")).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].subject, "Needle");
         assert_eq!(messages[0].id, "imap-4f7574626f782061726368697665-7-42");
@@ -1013,10 +1137,8 @@ mod tests {
             assert_eq!(&body[..raw.len()], raw);
             write!(socket, "{tag} OK appended\r\n").unwrap();
         });
-        let mut client = imap::Client::new(TcpStream::connect(address).unwrap());
-        client.read_greeting().unwrap();
-        let mut session = client.login("me", "secret").unwrap();
-        save_sent_session(&mut session, raw).unwrap();
+        let mut session = session_at(address);
+        imap_io::block_on(save_sent_session(&mut session, raw)).unwrap();
         server.join().unwrap();
     }
     #[test]
@@ -1107,7 +1229,7 @@ mod tests {
             ("STATUS \"Outbox\" (MESSAGES UNSEEN)", "* STATUS \"Outbox\" (MESSAGES 12 UNSEEN 3)\r\n".into()),
             ("STATUS \"INBOX\" (MESSAGES UNSEEN)", "* STATUS \"INBOX\" (MESSAGES 20 UNSEEN 7)\r\n".into()),
         ]);
-        let folders = folders_session(&mut mock_session()).unwrap();
+        let folders = imap_io::block_on(folders_session(&mut mock_session())).unwrap();
         assert_eq!(folders.len(), 2);
         assert_eq!(folders[0].role, FolderRole::Sent);
         assert_eq!((folders[0].total, folders[0].unread), (12, 3));
@@ -1159,7 +1281,7 @@ mod tests {
             }
             let server = mock_imap(steps);
             let mut session = mock_session();
-            let result = organize_session(
+            let result = imap_io::block_on(organize_session(
                 &mut session,
                 &[format!(
                     "imap-{}-42",
@@ -1170,7 +1292,7 @@ mod tests {
                 (!matches!(operation, "flags" | "delete")).then_some("Archive"),
                 None,
                 operation == "delete",
-            );
+            ));
             assert_eq!(
                 result.is_err(),
                 operation == "stale",
@@ -1199,11 +1321,8 @@ mod tests {
         })
     }
     thread_local!(static MOCK: std::cell::Cell<Option<std::net::SocketAddr>> = const { std::cell::Cell::new(None) });
-    fn mock_session() -> imap::Session<TcpStream> {
-        let address = MOCK.with(|cell| cell.get()).unwrap();
-        let mut client = imap::Client::new(TcpStream::connect(address).unwrap());
-        client.read_greeting().unwrap();
-        client.login("me", "secret").unwrap()
+    fn mock_session() -> Session {
+        session_at(MOCK.with(|cell| cell.get()).unwrap())
     }
     /// A scripted server: answers CAPABILITY and EXAMINE, then `idle` decides what IDLE sees.
     fn idle_server(capabilities: &'static str, idle: Option<&'static str>) -> std::net::SocketAddr {
@@ -1249,10 +1368,9 @@ mod tests {
         address
     }
     fn idle(address: std::net::SocketAddr) -> Result<bool, Error> {
-        let mut client = imap::Client::new(TcpStream::connect(address).unwrap());
-        client.read_greeting().unwrap();
-        let mut session = client.login("me", "secret").unwrap();
-        idle_session(&mut session, Duration::from_millis(400))
+        let session = session_at(address);
+        imap_io::block_on(idle_session(session, Duration::from_millis(400)))
+            .map(|(changed, _)| changed)
     }
     #[test]
     fn idle_reports_new_mail_quiet_timeouts_and_unsupported_servers() {
@@ -1288,15 +1406,15 @@ mod tests {
             ),
         ]);
         let mut session = mock_session();
-        let page = |session: &mut imap::Session<TcpStream>, offset| {
-            query_session_with_identity(
+        let page = |session: &mut Session, offset| {
+            imap_io::block_on(query_session_with_identity(
                 session,
                 "Work",
                 "",
                 offset,
                 &Default::default(),
                 &mut |_, _| {},
-            )
+            ))
             .unwrap()
         };
         let older = page(&mut session, 100);
@@ -1345,17 +1463,17 @@ mod tests {
             ),
         ]);
         let mut session = mock_session();
-        let messages = query_session(&mut session, "inbox", "").unwrap();
+        let messages = imap_io::block_on(query_session(&mut session, "inbox", "")).unwrap();
         assert_eq!(messages[0].subject, "Big");
         assert!(messages[0].seen && messages[0].flagged);
         assert!(messages[0].body.contains("larger than 2 MB"));
         let (name, validity, uid) = parse_id(&messages[0].id).unwrap();
         assert!(matches!(
-            fetch_session(&mut session, &name, validity, uid),
+            imap_io::block_on(fetch_session(&mut session, &name, validity, uid)),
             Err(Error::Missing)
         ));
         assert_eq!(
-            fetch_session(&mut session, &name, validity, uid).unwrap(),
+            imap_io::block_on(fetch_session(&mut session, &name, validity, uid)).unwrap(),
             raw.as_bytes()
         );
         server.join().unwrap();
@@ -1390,14 +1508,14 @@ mod tests {
         old.id = "imap-7-1".into();
         let known = std::collections::HashMap::from([(old.id.clone(), old)]);
         let mut steps = Vec::new();
-        let listing = query_session_with_identity(
+        let listing = imap_io::block_on(query_session_with_identity(
             &mut session,
             "inbox",
             "",
             0,
             &known,
             &mut |done, total| steps.push((done, total)),
-        )
+        ))
         .unwrap();
         assert_eq!(steps, [(0, 2), (2, 2)]);
         let ids: Vec<_> = listing.messages.iter().map(|m| m.id.as_str()).collect();
@@ -1406,12 +1524,12 @@ mod tests {
         assert!(listing.messages[2].seen);
         assert_eq!(listing.raws.len(), 2);
         let mut found = Vec::new();
-        fetch_many_session(
+        imap_io::block_on(fetch_many_session(
             &mut session,
             &["imap-7-2".into(), "imap-7-1".into()],
             100,
             &mut |id, raw| found.push((id, raw)),
-        )
+        ))
         .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0, "imap-7-2");
@@ -1580,26 +1698,26 @@ mod tests {
     fn imap_starttls_upgrades_with_a_pinned_certificate_before_login() {
         let (port, server) = starttls_imap("OK begin TLS", PINNED_CERT, PINNED_KEY);
         let account = pinned_account("127.0.0.1", port, 1025, true);
-        account.login().unwrap();
+        imap_io::block_on(account.login(IO_TIMEOUT)).unwrap();
         let lines = server.join().unwrap();
         assert!(lines[0].contains("LOGIN"), "{lines:?}");
     }
     #[test]
     fn imap_never_logs_in_when_starttls_is_refused_or_the_certificate_differs() {
         let (port, server) = starttls_imap("NO not here", PINNED_CERT, PINNED_KEY);
-        let error = pinned_account("127.0.0.1", port, 1025, true)
-            .login()
-            .err()
-            .unwrap();
+        let error =
+            imap_io::block_on(pinned_account("127.0.0.1", port, 1025, true).login(IO_TIMEOUT))
+                .err()
+                .unwrap();
         assert!(error.to_string().contains("STARTTLS"), "{error}");
         // The client closes the connection instead of sending credentials in plain text.
         assert_eq!(server.join().unwrap(), vec![String::new()]);
 
         let (port, server) = starttls_imap("OK begin TLS", OTHER_CERT, OTHER_KEY);
-        let error = pinned_account("127.0.0.1", port, 1025, true)
-            .login()
-            .err()
-            .unwrap();
+        let error =
+            imap_io::block_on(pinned_account("127.0.0.1", port, 1025, true).login(IO_TIMEOUT))
+                .err()
+                .unwrap();
         assert!(
             error.to_string().contains("TLS negotiation failed"),
             "{error}"
@@ -1629,10 +1747,38 @@ mod tests {
                 write!(reader.get_mut(), "{tag} OK logged in\r\n").unwrap();
                 true
             });
-            let result = pinned_account(host, port, 465, false).login();
+            let result =
+                imap_io::block_on(pinned_account(host, port, 465, false).login(IO_TIMEOUT));
             assert_eq!(result.is_ok(), accepted, "{host}");
             assert_eq!(server.join().unwrap(), accepted, "{host}");
         }
+    }
+    #[test]
+    fn reuses_one_logged_in_connection_across_operations() {
+        use std::io::{BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accepts exactly one connection, so a second login would be refused.
+        let server = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            drop(listener);
+            let mut stream = acceptor(PINNED_CERT, PINNED_KEY).accept(socket).unwrap();
+            write!(stream, "* OK ready\r\n").unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut commands = Vec::new();
+            for _ in 0..3 {
+                let line = read_line(&mut reader);
+                let (tag, command) = line.trim_end().split_once(' ').unwrap();
+                commands.push(command.split(' ').next().unwrap().to_owned());
+                write!(reader.get_mut(), "{tag} OK done\r\n").unwrap();
+            }
+            commands
+        });
+        let account = pinned_account("127.0.0.1", port, 465, false);
+        assert!(account.folders().unwrap().is_empty());
+        assert!(account.folders().unwrap().is_empty());
+        assert_eq!(server.join().unwrap(), ["LOGIN", "LIST", "LIST"]);
+        assert_eq!(imap_io::idle_count(account.pool_key()), 1);
     }
     #[test]
     fn rejects_malformed_or_multiple_pinned_certificates() {
@@ -1782,46 +1928,16 @@ fn folder_role(name: &str, attributes: &[&str]) -> FolderRole {
     }
 }
 
-fn folders_session<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
-) -> Result<Vec<Folder>, Error> {
-    use imap::types::NameAttribute;
-    let names = session.list(Some(""), Some("*")).map_err(imap_error)?;
+async fn folders_session(session: &mut Session) -> Result<Vec<Folder>, Error> {
+    let names = list_all(session).await?;
     let mut folders = Vec::new();
-    for name in names.iter() {
-        if name.attributes().contains(&NameAttribute::NoSelect) {
-            continue;
-        }
-        let attributes: Vec<&str> = name
-            .attributes()
-            .iter()
-            .filter_map(|a| match a {
-                NameAttribute::Custom(value) => Some(value.as_ref()),
-                _ => None,
-            })
-            .collect();
-        session
+    for name in names.iter().filter(|name| selectable(name)) {
+        let attributes = attribute_names(name);
+        let attributes: Vec<&str> = attributes.iter().map(String::as_str).collect();
+        let status = session
             .status(name.name(), "(MESSAGES UNSEEN)")
+            .await
             .map_err(imap_error)?;
-        // imap 2.x delivers STATUS data through its unsolicited response channel.
-        let mut total = None;
-        let mut unread = None;
-        while let Ok(response) = session.unsolicited_responses.try_recv() {
-            if let imap::types::UnsolicitedResponse::Status {
-                mailbox,
-                attributes,
-            } = response
-                && mailbox == name.name()
-            {
-                for attribute in attributes {
-                    match attribute {
-                        imap::types::StatusAttribute::Messages(value) => total = Some(value),
-                        imap::types::StatusAttribute::Unseen(value) => unread = Some(value),
-                        _ => {}
-                    }
-                }
-            }
-        }
         let is_inbox = name.name().eq_ignore_ascii_case("INBOX");
         folders.push(Folder {
             id: if is_inbox {
@@ -1835,15 +1951,15 @@ fn folders_session<T: std::io::Read + std::io::Write>(
                 name.name().into()
             },
             role: folder_role(name.name(), &attributes),
-            unread: unread.ok_or_else(|| remote("Missing UNSEEN"))?,
-            total: total.ok_or_else(|| remote("Missing MESSAGES"))?,
+            unread: status.unseen.ok_or_else(|| remote("Missing UNSEEN"))?,
+            total: status.exists,
         });
     }
     Ok(folders)
 }
 
-fn organize_session<T: std::io::Read + std::io::Write>(
-    session: &mut imap::Session<T>,
+async fn organize_session(
+    session: &mut Session,
     ids: &[String],
     seen: Option<bool>,
     flagged: Option<bool>,
@@ -1855,22 +1971,28 @@ fn organize_session<T: std::io::Read + std::io::Write>(
         .iter()
         .map(|id| parse_id(id))
         .collect::<Result<Vec<_>, _>>()?;
-    let capabilities = session.capabilities().map_err(imap_error)?;
+    let capabilities = session.capabilities().await.map_err(imap_error)?;
     let can_move = capabilities.has_str("MOVE");
     let uidplus = capabilities.has_str("UIDPLUS");
     for (name, validity, uid) in parsed {
-        if session.select(&name).map_err(imap_error)?.uid_validity != Some(validity) {
+        if session
+            .select(&name)
+            .await
+            .map_err(imap_error)?
+            .uid_validity
+            != Some(validity)
+        {
             return Err(Error::Invalid("Mailbox UIDVALIDITY changed".into()));
         }
         let uid = uid.to_string();
         for (value, flag) in [(seen, "\\Seen"), (flagged, "\\Flagged")] {
             if let Some(value) = value {
-                session
-                    .uid_store(
-                        &uid,
-                        format!("{}FLAGS.SILENT ({flag})", if value { "+" } else { "-" }),
-                    )
-                    .map_err(imap_error)?;
+                uid_store(
+                    session,
+                    &uid,
+                    &format!("{}FLAGS.SILENT ({flag})", if value { "+" } else { "-" }),
+                )
+                .await?;
             }
         }
         let target = if delete {
@@ -1883,20 +2005,24 @@ fn organize_session<T: std::io::Read + std::io::Write>(
                 continue;
             }
             if can_move {
-                session.uid_mv(&uid, target).map_err(imap_error)?;
+                session.uid_mv(&uid, target).await.map_err(imap_error)?;
                 continue;
             }
-            session.uid_copy(&uid, target).map_err(imap_error)?;
+            session.uid_copy(&uid, target).await.map_err(imap_error)?;
         }
         if target.is_some() || delete {
-            session
-                .uid_store(&uid, "+FLAGS.SILENT (\\Deleted)")
-                .map_err(imap_error)?;
+            uid_store(session, &uid, "+FLAGS.SILENT (\\Deleted)").await?;
             // A plain EXPUNGE would also remove messages other clients only marked as
             // deleted, so without UIDPLUS the message stays flagged until the server or
             // another client expunges it.
             if uidplus {
-                session.uid_expunge(&uid).map_err(imap_error)?;
+                session
+                    .uid_expunge(&uid)
+                    .await
+                    .map_err(imap_error)?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(imap_error)?;
             }
         }
     }

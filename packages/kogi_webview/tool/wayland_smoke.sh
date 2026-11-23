@@ -51,6 +51,11 @@ if [[ -z $ready ]]; then
   exit 1
 fi
 sleep 1  # let WebKit paint and Weston composite
+if grep -q 'kogi_webview:' "$log"; then
+  grep 'kogi_webview:' "$log"
+  echo "FAIL: the plugin logged a warning (see above)"
+  exit 1
+fi
 
 shot_dir=$(mktemp -d "$runtime/shot.XXXX")
 (cd "$shot_dir" && WAYLAND_DISPLAY=kogi weston-screenshooter >/dev/null 2>&1)

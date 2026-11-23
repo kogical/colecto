@@ -75,9 +75,9 @@ class KogiWebView extends StatefulWidget {
   /// Without a handler, right-clicks inside the view do nothing.
   final ValueChanged<KogiWebViewContextMenu>? onContextMenu;
 
-  /// Called once if the view cannot be shown here (another platform, or a
-  /// runner without the GtkOverlay), e.g. to swap in a differently sized
-  /// fallback.
+  /// Called once if the view cannot be shown here (another platform, a
+  /// runner without the GtkOverlay, or [blockNetwork] cannot be enforced),
+  /// e.g. to swap in a differently sized fallback.
   final VoidCallback? onUnavailable;
 
   /// Built on unsupported platforms or when the native side is unavailable.
@@ -182,6 +182,17 @@ class _KogiWebViewState extends State<KogiWebView>
   void onLink(String url) => widget.onLinkTap?.call(url);
 
   @override
+  void onUnavailable() {
+    // The native side cannot honour this widget's settings (for example the
+    // network filter failed to compile), so it refused to load the page.
+    if (!mounted || _unsupported) return;
+    setState(() => _unsupported = true);
+    _c.detachView(_id, this);
+    _c.invoke('dispose', {'id': _id});
+    widget.onUnavailable?.call();
+  }
+
+  @override
   void onContextMenu(Offset globalPosition, String? link, bool hasSelection) {
     widget.onContextMenu?.call(
       KogiWebViewContextMenu(
@@ -202,7 +213,7 @@ class _KogiWebViewState extends State<KogiWebView>
     final onScreen = seen && box != null && box.attached && box.hasSize;
     final place = <String, Object>{'id': _id, 'visible': onScreen};
     if (onScreen) {
-      final slot = box.localToGlobal(Offset.zero) & box.size;
+      final slot = globalBounds(box);
       final clip = _clipRect();
       place.addAll({
         'sx': slot.left,
@@ -214,6 +225,8 @@ class _KogiWebViewState extends State<KogiWebView>
         'cw': clip.width,
         'ch': clip.height,
         'internalScroll': widget.scrollsInternally,
+        // Scaled ancestors (an app-wide zoom) scale the page with them.
+        'zoom': box.size.width > 0 ? slot.width / box.size.width : 1.0,
       });
     }
     if (!mapEquals(place, _lastPlace)) {
@@ -245,7 +258,7 @@ class _KogiWebViewState extends State<KogiWebView>
     for (var s = Scrollable.maybeOf(ctx); s != null;) {
       final rb = s.context.findRenderObject() as RenderBox?;
       if (rb != null && rb.hasSize && rb.attached) {
-        clip = clip.intersect(rb.localToGlobal(Offset.zero) & rb.size);
+        clip = clip.intersect(globalBounds(rb));
       }
       ctx = s.context;
       s = Scrollable.maybeOf(ctx);

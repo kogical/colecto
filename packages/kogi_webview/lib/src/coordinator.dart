@@ -139,6 +139,8 @@ class Coordinator {
         view.onHeight(_d(args['height']));
       case 'link':
         view.onLink(args['url']! as String);
+      case 'unavailable':
+        view.onUnavailable();
       case 'contextMenu':
         view.onContextMenu(
           Offset(_d(args['x']), _d(args['y'])),
@@ -153,10 +155,16 @@ class Coordinator {
   static double _d(Object? v) => (v as num?)?.toDouble() ?? 0;
 }
 
+/// [box]'s bounds in global (window) coordinates, including any scaling
+/// transforms above it, such as an app-wide zoom.
+Rect globalBounds(RenderBox box) =>
+    MatrixUtils.transformRect(box.getTransformTo(null), Offset.zero & box.size);
+
 /// Native events routed to one view.
 abstract class NativeEvents {
   void onHeight(double height);
   void onLink(String url);
+  void onUnavailable();
   void onContextMenu(Offset globalPosition, String? link, bool hasSelection);
 }
 

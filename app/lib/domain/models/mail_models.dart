@@ -81,8 +81,18 @@ class MailMessage {
   final bool flagged;
   final String thread;
 
-  String get displaySender =>
-      sender.trim().isNotEmpty ? sender.trim() : address;
+  /// The sender's name. Older stored mail keeps the raw `From:` header
+  /// (`"Ana Ruiz" <ana@example.com>`); show only the name, or the address
+  /// when there is none.
+  String get displaySender {
+    final (name, email) = splitMailbox(
+      sender.trim().isNotEmpty ? sender : address,
+    );
+    return name.isNotEmpty ? name : email;
+  }
+
+  /// The bare email address (`ana@example.com`).
+  String get email => splitMailbox(address.isNotEmpty ? address : sender).$2;
 
   String get preview => body.replaceAll(RegExp(r'\s+'), ' ').trim();
 
@@ -478,4 +488,20 @@ class DownloadedAttachment {
   final String name;
   final String contentType;
   final Uint8List bytes;
+}
+
+/// Splits a mailbox such as `"Ana Ruiz" <ana@example.com>` into its display
+/// name and address. A bare address has no name.
+(String, String) splitMailbox(String raw) {
+  final text = raw.trim();
+  final open = text.lastIndexOf('<');
+  final close = text.lastIndexOf('>');
+  if (open < 0 || close < open) return ('', text);
+  var name = text.substring(0, open).trim();
+  if (name.length >= 2 && name.startsWith('"') && name.endsWith('"')) {
+    name = name
+        .substring(1, name.length - 1)
+        .replaceAllMapped(RegExp(r'\\(.)'), (m) => m[1]!);
+  }
+  return (name, text.substring(open + 1, close).trim());
 }

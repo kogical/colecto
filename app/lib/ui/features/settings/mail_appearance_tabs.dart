@@ -3,7 +3,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../data/platform/system_fonts.dart';
-import '../../../data/platform/systemd_services.dart';
+import '../../../data/platform/background_service.dart';
 import '../../../domain/models/preferences_models.dart';
 import '../../core/kit/kit.dart';
 import '../../core/theme/colecto_palette.dart';
@@ -797,14 +797,9 @@ class PrivacySettingsTab extends StatelessWidget {
 /// Settings → Connection: the mail service this app uses, Linux systemd
 /// background services, and another server to switch to.
 class ServersSettingsTab extends StatefulWidget {
-  const ServersSettingsTab({
-    super.key,
-    required this.controller,
-    this.systemdManager,
-  });
+  const ServersSettingsTab({super.key, required this.controller});
 
   final MailController controller;
-  final SystemdServiceManager? systemdManager;
 
   @override
   State<ServersSettingsTab> createState() => _ServersSettingsTabState();
@@ -817,27 +812,15 @@ class _ServersSettingsTabState extends State<ServersSettingsTab> {
         : '',
   );
   final _token = TextEditingController();
-  late final SystemdServiceManager _systemd =
-      widget.systemdManager ?? createSystemdServiceManager();
-  Map<SystemdServiceKind, SystemdServiceStatus> _services = const {};
-  final Map<SystemdServiceKind, bool> _autostart = {
-    SystemdServiceKind.daemon: true,
-    SystemdServiceKind.notifications: true,
-  };
-  bool _servicesLoaded = false;
-  SystemdServiceKind? _busyService;
-  String? _serviceError;
-  String? _serviceNotice;
+  BackgroundStatus? _background;
+  bool _backgroundBusy = false;
+  String? _backgroundError;
   String? _error;
-
-  String get _appVersion => widget.controller.version?.version ?? '0.11.4';
 
   @override
   void initState() {
     super.initState();
-    if (!kIsWeb && _systemd.isLinuxHost) {
-      _loadServices();
-    }
+    _loadBackground();
   }
 
   @override
@@ -847,256 +830,101 @@ class _ServersSettingsTabState extends State<ServersSettingsTab> {
     super.dispose();
   }
 
-  Future<void> _loadServices() async {
+  Future<void> _loadBackground() async {
+    final background = widget.controller.background;
+    if (background == null) return;
     try {
-      final status = await _systemd.loadStatus(appVersion: _appVersion);
-      if (!mounted) return;
-      setState(() {
-        _services = status;
-        _servicesLoaded = true;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _servicesLoaded = true);
-    }
+      final status = await background.status();
+      if (mounted) setState(() => _background = status);
+    } catch (_) {}
   }
 
-  Future<void> _runServiceAction(
-    SystemdServiceKind kind,
-    Future<void> Function() action, {
-    String? doneMessage,
-  }) async {
+  Future<void> _changeBackground(Future<void> Function() action) async {
     setState(() {
-      _busyService = kind;
-      _serviceError = null;
-      _serviceNotice = null;
+      _backgroundBusy = true;
+      _backgroundError = null;
     });
     try {
       await action();
-      await _loadServices();
-      if (!mounted) return;
-      setState(() => _serviceNotice = doneMessage);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _serviceError = '$e');
-    } finally {
-      if (mounted) setState(() => _busyService = null);
+      if (mounted) setState(() => _backgroundError = '$e');
     }
+    await _loadBackground();
+    if (mounted) setState(() => _backgroundBusy = false);
   }
 
-  Future<void> _uninstallService(SystemdServiceKind kind) async {
-    final ok = await showColectoConfirm(
-      context: context,
-      title: 'Uninstall ${kind.title}?',
-      message:
-          'It stops now and no longer starts on login. Its saved mail is kept.',
-      confirmLabel: 'Uninstall',
-      danger: true,
-    );
-    if (!ok || !mounted) return;
-    await _runServiceAction(
-      kind,
-      () => _systemd.uninstall(kind),
-      doneMessage: '${kind.title} uninstalled.',
-    );
-  }
-
-  Widget _systemdSection(BuildContext context, ColectoPalette p) {
-    final anySupported = _services.values.any((s) => s.supported);
-    final reason = _services.values
-        .map((s) => s.reason)
-        .whereType<String>()
-        .firstOrNull;
+  Widget _backgroundSection() {
+    final c = widget.controller;
+    final background = c.background;
+    final status = _background;
+    if (background == null || status == null) return const SizedBox.shrink();
+    final remote = c.backendKind == BackendKind.remoteHttp;
+    final relayable = c.relayOrigin != null;
+    final String? unavailable = !status.supported
+        ? status.reason ?? 'Background service is unavailable here.'
+        : c.backendKind == BackendKind.demo
+        ? 'Not available for demo mail.'
+        : remote && !relayable
+        ? 'Needs a server with an HTTPS address.'
+        : null;
+    final on =
+        status.installed &&
+        (remote
+            ? status.mode == BackgroundMode.relay &&
+                  status.relayOrigin == c.relayOrigin
+            : status.mode == BackgroundMode.mail);
+    final busy = _backgroundBusy;
     return ColectoSection(
-      title: 'Background services',
-      description:
-          'Run Colecto as systemd user services, whichever way you installed '
-          'it.',
+      title: 'Background',
       children: [
-        if (_serviceError != null) ...[
-          ColectoErrorBox(message: _serviceError!),
+        if (_backgroundError != null) ...[
+          ColectoErrorBox(message: _backgroundError!),
           const SizedBox(height: 12),
         ],
-        if (_serviceNotice != null) ...[
-          ColectoNotice(
-            icon: LucideIcons.check,
-            child: Text(_serviceNotice!, style: kStyle(13, color: p.ink)),
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (!_servicesLoaded)
-          const ColectoSkeleton(lines: 2)
-        else if (!anySupported)
-          ColectoParagraph(
-            reason ?? 'Local systemd user services are unavailable here.',
-            small: true,
-            tone: ColectoTone.secondary,
-          )
-        else
-          for (final kind in SystemdServiceKind.values)
-            if (_services[kind] case final status?)
-              _serviceRow(context, p, status),
-      ],
-    );
-  }
-
-  Widget _serviceRow(
-    BuildContext context,
-    ColectoPalette p,
-    SystemdServiceStatus status,
-  ) {
-    final kind = status.kind;
-    final busy = _busyService != null;
-    final busyHere = _busyService == kind;
-    final icon = kind == SystemdServiceKind.daemon
-        ? LucideIcons.server
-        : LucideIcons.bell;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 10,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        alignment: WrapAlignment.spaceBetween,
-        children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: p.raise,
-                    borderRadius: BorderRadius.circular(
-                      colectoRadius(context) + 2,
+        ColectoSettingRow(
+          title: 'Keep running after closing',
+          description:
+              unavailable ??
+              (remote
+                  ? 'Shows notifications for new mail on '
+                        '${Uri.parse(c.relayOrigin!).host} while Colecto is '
+                        'closed.'
+                  : 'Keeps syncing your mail and shows notifications for '
+                        'new mail while Colecto is closed.'),
+          trailing: ColectoSwitch(
+            value: on,
+            semanticLabel: 'Keep running after closing',
+            onChanged: busy || unavailable != null
+                ? null
+                : (value) => _changeBackground(
+                    () => c.setBackgroundService(
+                      value,
+                      startOnLogin: status.installed
+                          ? status.startOnLogin
+                          : true,
                     ),
                   ),
-                  child: Icon(icon, size: 17, color: p.ink2),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          ColectoText(
-                            kind.title,
-                            role: ColectoTextRole.bodyStrong,
-                          ),
-                          ColectoBadge(
-                            text: status.stateLabel,
-                            accent: status.installed && status.active,
-                          ),
-                          if (status.installed && status.version != null)
-                            ColectoText.caption('v${status.version}'),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      ColectoParagraph(
-                        kind.description,
-                        small: true,
-                        tone: ColectoTone.secondary,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          ),
+        ),
+        if (on) ...[
+          const SizedBox(height: 10),
+          ColectoSettingRow(
+            title: 'Start on login',
+            description: status.running
+                ? 'Running now.'
+                : 'Not running; it starts when you open Colecto.',
+            trailing: ColectoSwitch(
+              value: status.startOnLogin,
+              semanticLabel: 'Start on login',
+              onChanged: busy
+                  ? null
+                  : (value) => _changeBackground(
+                      () => background.setStartOnLogin(value),
+                    ),
             ),
           ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const ColectoText(
-                    'Start on login',
-                    role: ColectoTextRole.caption,
-                  ),
-                  const SizedBox(width: 6),
-                  ColectoSwitch(
-                    value: status.installed
-                        ? status.enabled
-                        : (_autostart[kind] ?? true),
-                    semanticLabel: 'Start ${kind.title} on login',
-                    onChanged: busy
-                        ? null
-                        : (on) {
-                            if (status.installed) {
-                              _runServiceAction(
-                                kind,
-                                () => _systemd.setAutostart(kind, enabled: on),
-                              );
-                            } else {
-                              setState(() => _autostart[kind] = on);
-                            }
-                          },
-                  ),
-                ],
-              ),
-              if (!status.installed)
-                ColectoButton(
-                  label: busyHere ? 'Installing…' : 'Install',
-                  variant: ColectoButtonVariant.primary,
-                  onPressed: busy
-                      ? null
-                      : () => _runServiceAction(
-                          kind,
-                          () => _systemd.install(
-                            kind,
-                            appVersion: _appVersion,
-                            autostart: _autostart[kind] ?? true,
-                          ),
-                          doneMessage: '${kind.title} installed.',
-                        ),
-                )
-              else ...[
-                if (status.updateTo != null)
-                  ColectoButton(
-                    label: busyHere ? 'Updating…' : 'Update',
-                    onPressed: busy
-                        ? null
-                        : () => _runServiceAction(
-                            kind,
-                            () =>
-                                _systemd.update(kind, appVersion: _appVersion),
-                            doneMessage:
-                                '${kind.title} updated to v${status.updateTo}'
-                                '${status.active ? ' and restarted' : ''}.',
-                          ),
-                  ),
-                ColectoIconButton(
-                  icon: status.active ? LucideIcons.square : LucideIcons.play,
-                  tooltip: status.active
-                      ? 'Stop ${kind.title}'
-                      : 'Start ${kind.title}',
-                  onPressed: busy
-                      ? null
-                      : () => _runServiceAction(
-                          kind,
-                          () => status.active
-                              ? _systemd.stop(kind)
-                              : _systemd.start(kind),
-                        ),
-                ),
-                ColectoIconButton(
-                  icon: LucideIcons.trash2,
-                  tooltip: 'Uninstall ${kind.title}',
-                  danger: true,
-                  onPressed: busy ? null : () => _uninstallService(kind),
-                ),
-              ],
-            ],
-          ),
         ],
-      ),
+      ],
     );
   }
 
@@ -1141,7 +969,11 @@ class _ServersSettingsTabState extends State<ServersSettingsTab> {
         'Remote server',
         c.daemonUrl,
       ),
-      BackendKind.localFfi => (LucideIcons.monitor, 'This app', 'This device'),
+      BackendKind.localFfi => (
+        LucideIcons.monitor,
+        'This device',
+        c.usesBackgroundService ? 'Background service' : 'This app',
+      ),
       BackendKind.demo => (
         LucideIcons.flaskConical,
         'Demo mail',
@@ -1221,7 +1053,7 @@ class _ServersSettingsTabState extends State<ServersSettingsTab> {
             ),
           ],
         ),
-        if (!kIsWeb && _systemd.isLinuxHost) _systemdSection(context, p),
+        _backgroundSection(),
         ColectoSection(
           title: 'Use another server',
           description:

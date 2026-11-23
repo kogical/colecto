@@ -45,5 +45,7 @@ class NativeFfiBridge {
 
   Stream<ServiceEvent> events() => const Stream<ServiceEvent>.empty();
 
+  Future<void> close() async {}
+
   void dispose() {}
 }

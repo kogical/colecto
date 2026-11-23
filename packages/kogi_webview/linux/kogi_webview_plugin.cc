@@ -44,6 +44,9 @@ struct Plugin {
   WebKitUserContentFilter* block_filter = nullptr;
   bool filter_pending = true;  // compiling; loads that need it wait
   cairo_region_t* occluders = nullptr;  // window coords
+  // Keys handed to Flutter that it may give back (see on_key).
+  GdkEventKey forwarded[16] = {};
+  guint forwarded_next = 0;
 };
 
 struct KogiView {
@@ -255,11 +258,25 @@ gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event, gpointer data) {
   return TRUE;
 }
 
-// Keys the page does not use (WebKit re-emits them after the web process
-// declines them) go to Flutter, so app shortcuts keep working while the view
-// has focus. Copy, select-all, arrows and the like stay with WebKit.
-gboolean on_unhandled_key(GtkWidget*, GdkEvent* event, gpointer) {
+// A focused email view gets keys only after Flutter: the app's shortcuts
+// (S, A, Ctrl+K…) work wherever the click went. Flutter puts back each key it
+// does not use as the same event (`gdk_event_put`); WebKit then handles it, so
+// copying a selection, Space and Page Down still work in the email.
+bool same_key(const GdkEventKey& a, const GdkEventKey* b) {
+  return a.type == b->type && a.time == b->time &&
+         a.hardware_keycode == b->hardware_keycode && a.state == b->state;
+}
+
+gboolean on_key(GtkWidget*, GdkEvent* event, gpointer) {
   if (g_plugin == nullptr || g_plugin->view == nullptr) return FALSE;
+  auto* key = reinterpret_cast<GdkEventKey*>(event);
+  for (auto& seen : g_plugin->forwarded) {
+    if (same_key(seen, key)) {
+      seen = {};
+      return FALSE;  // Flutter gave it back: WebKit's turn.
+    }
+  }
+  g_plugin->forwarded[g_plugin->forwarded_next++ % 16] = *key;
   gtk_widget_event(GTK_WIDGET(g_plugin->view), event);
   return TRUE;
 }
@@ -412,10 +429,8 @@ KogiView* create_view(int64_t id) {
   g_signal_connect(v->web, "load-changed", G_CALLBACK(on_load_changed), v);
   g_signal_connect(v->web, "scroll-event", G_CALLBACK(on_scroll), v);
   g_signal_connect(v->web, "context-menu", G_CALLBACK(on_context_menu), v);
-  g_signal_connect_after(v->web, "key-press-event",
-                         G_CALLBACK(on_unhandled_key), v);
-  g_signal_connect_after(v->web, "key-release-event",
-                         G_CALLBACK(on_unhandled_key), v);
+  g_signal_connect(v->web, "key-press-event", G_CALLBACK(on_key), v);
+  g_signal_connect(v->web, "key-release-event", G_CALLBACK(on_key), v);
 
   v->clip = gtk_layout_new(nullptr, nullptr);
   gtk_layout_put(GTK_LAYOUT(v->clip), v->web, 0, 0);

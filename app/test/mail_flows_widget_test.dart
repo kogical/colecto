@@ -256,6 +256,25 @@ void main() {
       },
     );
 
+    testWidgets('Ctrl+K still opens the palette after focus leaves the shell', (
+      tester,
+    ) async {
+      await pumpColectoApp(tester);
+
+      await tester.tap(find.byType(EditableText).first);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      expect(find.text('New message'), findsOneWidget);
+    });
+
     testWidgets('settings sections render without errors and persist changes', (
       tester,
     ) async {

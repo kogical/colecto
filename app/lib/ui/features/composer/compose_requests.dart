@@ -55,7 +55,7 @@ ComposeRequest forwardRequest(MailMessage msg, MessageContent? content) {
       : 'Fwd: ${msg.subject}';
   final body =
       '\n\n---------- Forwarded message ----------\n'
-      'From: ${msg.displaySender} <${msg.address}>\n'
+      'From: ${msg.displaySender} <${msg.email}>\n'
       'Date: ${when(msg.date).full}\n'
       'Subject: ${msg.subject}\n'
       '${content?.to.isNotEmpty == true ? 'To: ${content!.to}\n' : ''}'

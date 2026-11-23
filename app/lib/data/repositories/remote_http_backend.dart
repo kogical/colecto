@@ -20,13 +20,20 @@ class RemoteHttpBackend implements MailBackend {
     required String baseUrl,
     String token = '',
     http.Client? client,
+    http.Client Function()? streamClient,
+    this._label,
   }) : _baseUrl = _normalizeBaseUrl(baseUrl),
        _token = token.trim(),
-       _client = client ?? http.Client();
+       _client = client ?? (streamClient ?? http.Client.new)(),
+       _newStreamClient = streamClient ?? http.Client.new;
 
   final String _baseUrl;
   final String _token;
   final http.Client _client;
+
+  /// Opens the client for each event stream connection.
+  final http.Client Function() _newStreamClient;
+  final String? _label;
   final Set<http.Client> _activeStreamClients = {};
   bool _disposed = false;
 
@@ -42,9 +49,11 @@ class RemoteHttpBackend implements MailBackend {
   }
 
   @override
-  String get backendLabel => _baseUrl.isEmpty
-      ? 'Remote Daemon (same-origin)'
-      : 'Remote Daemon ($_baseUrl)';
+  String get backendLabel =>
+      _label ??
+      (_baseUrl.isEmpty
+          ? 'Remote Daemon (same-origin)'
+          : 'Remote Daemon ($_baseUrl)');
 
   Uri _uri(String path, [Map<String, String>? query]) {
     final base = '$_baseUrl/api/v1$path';
@@ -162,7 +171,7 @@ class RemoteHttpBackend implements MailBackend {
     Future<void> pump() async {
       var backoffMs = 1000;
       while (!cancelled && !_disposed) {
-        final streamClient = http.Client();
+        final streamClient = _newStreamClient();
         liveClient = streamClient;
         _activeStreamClients.add(streamClient);
         var stopReconnecting = false;

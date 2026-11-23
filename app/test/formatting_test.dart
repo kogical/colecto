@@ -54,6 +54,26 @@ void main() {
       expect(when('2026-03-02T08:05:00', now: now).group, 'March');
     });
 
+    test('real mail headers (RFC 2822) parse instead of showing raw', () {
+      expect(
+        parseMailDate('Sun, 22 Nov 2026 08:26:11 -0800')!.toUtc(),
+        DateTime.utc(2026, 11, 22, 16, 26, 11),
+      );
+      expect(
+        parseMailDate('2 Mar 26 9:05 GMT (Coordinated Universal Time)')!
+            .toUtc(),
+        DateTime.utc(2026, 3, 2, 9, 5),
+      );
+      expect(parseMailDate('Thu, 5 Nov 2026 10:00:00 +0530')!.toUtc().hour, 4);
+      // Noon UTC is still Nov 22 in every time zone.
+      final label = when(
+        'Sun, 22 Nov 2026 12:00:00 +0000',
+        now: DateTime(2027, 1, 10),
+      ).label;
+      expect(label, 'Nov 22, 2026');
+      expect(parseMailDate('not a date'), isNull);
+    });
+
     test('reply all omits self and sender, forward quotes original', () {
       const msg = MailMessage(
         id: '1',

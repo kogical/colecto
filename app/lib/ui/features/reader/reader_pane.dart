@@ -171,11 +171,11 @@ class _ReaderPaneState extends State<ReaderPane> {
         style == ColectoPlatformStyle.macos ||
         style == ColectoPlatformStyle.android ||
         isIos;
-    Widget tool(IconData icon, String label, VoidCallback? onTap) =>
+    Widget tool(IconData icon, String label, String key, VoidCallback? onTap) =>
         ColectoButton(
           label: iconOnly ? '' : label,
           icon: icon,
-          tooltip: label,
+          tooltip: '$label ($key)',
           variant: ColectoButtonVariant.ghost,
           onPressed: onTap,
         );
@@ -210,17 +210,20 @@ class _ReaderPaneState extends State<ReaderPane> {
             tool(
               LucideIcons.reply,
               'Reply',
+              'R',
               () => widget.onCompose(_reply(latest, content, false)),
             ),
             if (!narrow)
               tool(
                 LucideIcons.replyAll,
                 'Reply all',
+                'Shift+R',
                 () => widget.onCompose(_reply(latest, content, true)),
               ),
             tool(
               LucideIcons.forward,
               'Forward',
+              'F',
               () => widget.onCompose(forwardRequest(latest, content)),
             ),
             Container(
@@ -231,12 +234,12 @@ class _ReaderPaneState extends State<ReaderPane> {
             ),
             ColectoIconButton(
               icon: LucideIcons.archive,
-              tooltip: 'Archive (E)',
+              tooltip: 'Archive (A)',
               onPressed: () => c.organizeMessages('archive', ids: allIds),
             ),
             ColectoIconButton(
               icon: LucideIcons.trash2,
-              tooltip: 'Move to Trash (#)',
+              tooltip: 'Move to Trash (D)',
               danger: true,
               onPressed: () => c.organizeMessages('delete', ids: allIds),
             ),
@@ -254,7 +257,7 @@ class _ReaderPaneState extends State<ReaderPane> {
             Builder(
               builder: (ctx) => ColectoIconButton(
                 icon: LucideIcons.ellipsis,
-                tooltip: 'More',
+                tooltip: 'More (.)',
                 onPressed: () =>
                     _moreMenu(ctx, latest, content, allIds, narrow),
               ),
@@ -286,7 +289,7 @@ class _ReaderPaneState extends State<ReaderPane> {
         ColectoMenuItem(
           label: 'Reply all',
           icon: LucideIcons.replyAll,
-          shortcut: 'A',
+          shortcut: 'Shift+R',
           onSelected: () => widget.onCompose(_reply(latest, content, true)),
         ),
         ColectoMenuItem(
@@ -594,7 +597,7 @@ class _ReaderPaneState extends State<ReaderPane> {
         ColectoMenuItem(
           label: 'Copy address',
           icon: LucideIcons.copy,
-          onSelected: () => Clipboard.setData(ClipboardData(text: m.address)),
+          onSelected: () => Clipboard.setData(ClipboardData(text: m.email)),
         ),
         ColectoMenuItem(
           label: 'Write to ${m.displaySender}',
@@ -620,7 +623,7 @@ class _ReaderPaneState extends State<ReaderPane> {
         ),
         child: Row(
           children: [
-            ColectoAvatar(name: m.displaySender, hueKey: m.address, size: 28),
+            ColectoAvatar(name: m.displaySender, hueKey: m.email, size: 28),
             const SizedBox(width: 12),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 180),
@@ -685,11 +688,7 @@ class _ReaderPaneState extends State<ReaderPane> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ColectoAvatar(
-                  name: m.displaySender,
-                  hueKey: m.address,
-                  size: 38,
-                ),
+                ColectoAvatar(name: m.displaySender, hueKey: m.email, size: 38),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -699,9 +698,9 @@ class _ReaderPaneState extends State<ReaderPane> {
                         m.displaySender,
                         style: kStyle(14.5, weight: 620, color: p.ink),
                       ),
-                      if (m.address.isNotEmpty && m.address != m.displaySender)
+                      if (m.email.isNotEmpty && m.email != m.displaySender)
                         Text(
-                          m.address,
+                          m.email,
                           style: kStyle(12.5, color: p.ink3, height: 1.45),
                         ),
                       if (recipients.isNotEmpty)

@@ -6,6 +6,7 @@ import '../../../domain/models/mail_models.dart';
 import '../../core/format/when.dart';
 import '../../core/theme/colecto_palette.dart';
 import '../../core/kit/kit.dart';
+import '../composer/compose_requests.dart';
 import 'mail_controller.dart';
 import 'folders.dart';
 
@@ -104,15 +105,86 @@ class _CommandPaletteState extends State<_CommandPalette> {
         onRun: () => c.loadMailbox(refresh: true),
       ),
       if (selected != null) ...[
+        for (final (title, icon, key, all) in [
+          ('Reply', LucideIcons.reply, 'R', false),
+          ('Reply all', LucideIcons.replyAll, 'Shift+R', true),
+        ])
+          _Command(
+            title: title,
+            group: 'Mail',
+            icon: icon,
+            shortcut: key,
+            onRun: () => c.startCompose(
+              replyRequest(
+                selected,
+                c.contentFor(selected.id),
+                all: all,
+                self: c.currentAccountInfo?.address ?? '',
+              ),
+            ),
+          ),
+        _Command(
+          title: 'Forward',
+          group: 'Mail',
+          icon: LucideIcons.forward,
+          shortcut: 'F',
+          onRun: () => c.startCompose(
+            forwardRequest(selected, c.contentFor(selected.id)),
+          ),
+        ),
         _Command(
           title: 'Archive conversation',
           group: 'Mail',
           icon: LucideIcons.archive,
-          shortcut: 'E',
+          shortcut: 'A',
           onRun: () => c.organizeMessages(
             'archive',
             ids: [for (final t in c.conversation) t.message.id],
           ),
+        ),
+        _Command(
+          title: 'Move conversation to Trash',
+          group: 'Mail',
+          icon: LucideIcons.trash2,
+          shortcut: 'D',
+          keywords: 'delete',
+          onRun: () => c.organizeMessages(
+            'delete',
+            ids: [for (final t in c.conversation) t.message.id],
+          ),
+        ),
+        _Command(
+          title: selected.flagged ? 'Unstar' : 'Star',
+          group: 'Mail',
+          icon: LucideIcons.star,
+          shortcut: 'S',
+          keywords: 'flag',
+          onRun: () => c.organizeMessages(
+            'flags',
+            ids: [selected.id],
+            flagged: !selected.flagged,
+          ),
+        ),
+        _Command(
+          title: c.conversation.any((t) => !t.message.seen)
+              ? 'Mark as read'
+              : 'Mark as unread',
+          group: 'Mail',
+          icon: LucideIcons.mail,
+          shortcut: 'U',
+          onRun: () => c.organizeMessages(
+            'flags',
+            ids: [for (final t in c.conversation) t.message.id],
+            seen: c.conversation.any((t) => !t.message.seen),
+          ),
+        ),
+        _Command(
+          title: 'More actions',
+          group: 'Mail',
+          icon: LucideIcons.ellipsis,
+          shortcut: '.',
+          keywords: 'menu context',
+          onRun: () => c.threadMenuRequests.value++,
         ),
         _Command(
           title: 'Summarize with AI',

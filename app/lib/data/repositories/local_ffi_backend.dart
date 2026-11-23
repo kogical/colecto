@@ -318,4 +318,10 @@ class LocalFfiBackend implements MailBackend {
     _delegate.dispose();
     _bridge.dispose();
   }
+
+  /// Disposes and waits until the mail store is closed.
+  Future<void> close() async {
+    _delegate.dispose();
+    await _bridge.close();
+  }
 }

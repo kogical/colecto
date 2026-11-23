@@ -181,6 +181,7 @@ void _requestWorkerEntry(List<Object?> args) {
     if (kind == 'shutdown') {
       syms.shutdown();
       inbox.close();
+      if (message.length > 1) (message[1]! as SendPort).send(true);
       return;
     }
     if (kind == 'request') {
@@ -483,6 +484,32 @@ class NativeFfiBridge {
       return ServiceEvent.fromWire(name, payload);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Like [dispose], but completes once Rust has closed the mail store, so
+  /// another process may open it.
+  Future<void> close() async {
+    final pending = _workerPortFuture;
+    if (pending != null && _workerPort == null) {
+      try {
+        await pending;
+      } catch (_) {}
+    }
+    final port = _workerPort;
+    if (port == null) {
+      dispose();
+      return;
+    }
+    final done = ReceivePort();
+    _workerPort = null;
+    _workerIsolate = null;
+    dispose();
+    port.send(<Object?>['shutdown', done.sendPort]);
+    try {
+      await done.first.timeout(const Duration(seconds: 10));
+    } finally {
+      done.close();
     }
   }
 

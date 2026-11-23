@@ -41,7 +41,14 @@ class _MailShellState extends State<MailShell> {
   MailController get c => widget.controller;
 
   @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_onStrayKey);
+  }
+
+  @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onStrayKey);
     _searchFocus.dispose();
     _shellFocus.dispose();
     super.dispose();
@@ -81,6 +88,18 @@ class _MailShellState extends State<MailShell> {
     if (ctx == null) return false;
     return ctx.widget is EditableText ||
         ctx.findAncestorStateOfType<EditableTextState>() != null;
+  }
+
+  /// Runs the shell's shortcuts when focus has left the shell, for example
+  /// after a field gives up focus to its route's scope, so they never stop
+  /// working. Focus inside the shell, or a dialog or menu on top, keeps the
+  /// normal focus-based handling.
+  bool _onStrayKey(KeyEvent event) {
+    if (!mounted || _shellFocus.hasFocus || _shellFocus.context == null) {
+      return false;
+    }
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+    return _onKey(_shellFocus, event) == KeyEventResult.handled;
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -146,23 +165,39 @@ class _MailShellState extends State<MailShell> {
     final ids = [for (final t in c.conversation) t.message.id];
     final content = c.contentFor(msg.id);
     final self = c.currentAccountInfo?.address ?? '';
+    final unread = c.conversation.any((t) => !t.message.seen);
+    final starred = c.conversation.any((t) => t.message.flagged);
     switch (key) {
-      case LogicalKeyboardKey.keyE:
+      case LogicalKeyboardKey.keyA || LogicalKeyboardKey.keyE:
         c.organizeMessages('archive', ids: ids);
-      case LogicalKeyboardKey.keyU:
-        c.organizeMessages('flags', ids: ids, seen: false);
-      case LogicalKeyboardKey.keyS:
-        c.organizeMessages('flags', ids: [msg.id], flagged: !msg.flagged);
-      case LogicalKeyboardKey.delete || LogicalKeyboardKey.numberSign:
+      case LogicalKeyboardKey.keyD ||
+          LogicalKeyboardKey.delete ||
+          LogicalKeyboardKey.numberSign:
         c.organizeMessages('delete', ids: ids);
       case LogicalKeyboardKey.digit3 when shift:
         c.organizeMessages('delete', ids: ids);
+      case LogicalKeyboardKey.keyU:
+        c.organizeMessages('flags', ids: ids, seen: unread);
+      case LogicalKeyboardKey.keyS:
+        // As the list and its menu: the thread is starred if any message is.
+        c.organizeMessages(
+          'flags',
+          ids: starred
+              ? [
+                  for (final t in c.conversation)
+                    if (t.message.flagged) t.message.id,
+                ]
+              : [msg.id],
+          flagged: !starred,
+        );
       case LogicalKeyboardKey.keyR:
-        _compose(replyRequest(msg, content, all: false, self: self));
-      case LogicalKeyboardKey.keyA:
-        _compose(replyRequest(msg, content, all: true, self: self));
+        _compose(replyRequest(msg, content, all: shift, self: self));
       case LogicalKeyboardKey.keyF:
         _compose(forwardRequest(msg, content));
+      case LogicalKeyboardKey.period || LogicalKeyboardKey.contextMenu:
+        c.threadMenuRequests.value++;
+      case LogicalKeyboardKey.f10 when shift:
+        c.threadMenuRequests.value++;
       default:
         return KeyEventResult.ignored;
     }

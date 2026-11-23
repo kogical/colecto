@@ -30,6 +30,7 @@ Colecto is built by AI agents with one human maintainer. These rules apply to ev
    - Render plain-text and simple messages natively in Flutter.
    - Render HTML emails in a lazy/pooled sandboxed WebView (or `<iframe sandbox>` via `HtmlElementView` on Web); never keep a WebView alive when no HTML message is open.
 6. **Never support POP3.**
+7. **Async Rust all the way.** Rust I/O uses async (Tokio) libraries. Never add a blocking client (`reqwest::blocking`, synchronous IMAP/SMTP/HTTP/D-Bus) or run synchronous code inside Tokio through `std::thread::spawn`, `tokio::task::spawn_blocking`, `block_on` or a similar bridge. If an operation truly has no async option, stop and get the maintainer's explicit approval before adding it, and record it under [Async Rust exceptions](docs/decisions.md#async-rust-exceptions). Only the exceptions listed there may block.
 
 ## Releases
 

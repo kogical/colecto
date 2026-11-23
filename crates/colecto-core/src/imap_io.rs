@@ -1,8 +1,7 @@
-//! Async IMAP plumbing: a small dedicated Tokio runtime, an inactivity timeout for sockets,
-//! and a per-account pool of logged-in sessions so most operations skip connect, TLS and LOGIN.
+//! Async IMAP plumbing: an inactivity timeout for sockets and a per-account pool of logged-in
+//! sessions, so most operations skip connect, TLS and LOGIN.
 use std::{
     collections::HashMap,
-    future::Future,
     hash::{BuildHasher, Hash},
     io,
     pin::Pin,
@@ -17,26 +16,6 @@ pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug> Io for T {}
 
 pub(crate) type Session = async_imap::Session<Box<dyn Io>>;
-
-/// IMAP work runs on its own runtime, so callers on any thread (Tokio blocking threads, FFI
-/// threads, plain test threads) can wait for it without needing a runtime of their own.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("colecto-imap")
-            .enable_all()
-            .build()
-            .expect("the IMAP runtime starts")
-    })
-}
-
-/// Run an IMAP future to completion from synchronous code. Must not be called from inside an
-/// async task; every caller reaches IMAP through a blocking thread.
-pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
-    runtime().block_on(future)
-}
 
 /// Fails a read or write that makes no progress for `limit`, like a socket timeout. Long
 /// transfers stay alive as long as bytes keep moving.
@@ -194,22 +173,4 @@ pub(crate) fn idle_count(key: u64) -> usize {
         .lock()
         .map(|pool| pool.get(&key).map_or(0, Vec::len))
         .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    /// The service reaches IMAP from Tokio blocking threads, where waiting is allowed.
-    #[test]
-    fn waits_from_another_runtimes_blocking_threads() {
-        let outer = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        let value = outer.block_on(async {
-            tokio::task::spawn_blocking(|| super::block_on(async { 7 }))
-                .await
-                .unwrap()
-        });
-        assert_eq!(value, 7);
-    }
 }

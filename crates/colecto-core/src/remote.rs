@@ -8,7 +8,7 @@ use crate::{
 use async_imap::types::{Fetch, Flag, Name, NameAttribute};
 use futures_util::TryStreamExt;
 use lettre::{
-    SmtpTransport, Transport,
+    AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     message::{MultiPart, SinglePart, header::ContentType},
     transport::smtp::{
         authentication::Credentials,
@@ -163,13 +163,13 @@ impl MailAccount {
         trash: Option<&str>,
         delete: bool,
     ) -> Result<(), Error> {
-        imap_io::block_on(self.with_session(async |session| {
+        crate::net::block_on(self.with_session(async |session| {
             organize_session(session, ids, seen, flagged, destination, trash, delete).await
         }))
     }
 
     pub fn folders(&self) -> Result<Vec<Folder>, Error> {
-        imap_io::block_on(self.with_session(async |session| folders_session(session).await))
+        crate::net::block_on(self.with_session(async |session| folders_session(session).await))
     }
 
     pub fn query(&self, folder: &str, search: &str) -> Result<Vec<Message>, Error> {
@@ -271,7 +271,7 @@ impl MailAccount {
         crate::validate_query(folder, search)?;
         crate::validate_offset(offset)?;
         crate::validate_limit(limit)?;
-        imap_io::block_on(self.with_session(async |session| {
+        crate::net::block_on(self.with_session(async |session| {
             query_session_with_limit(session, folder, search, offset, limit, known, progress).await
         }))
     }
@@ -293,21 +293,19 @@ impl MailAccount {
     /// IMAP IDLE (RFC 2177) on a read-only Inbox: `Ok(true)` when the server reports a change,
     /// `Ok(false)` when `timeout` passes quietly.
     /// Runs on its own connection (never pooled): IDLE holds it for the whole wait.
-    pub(crate) fn wait_for_inbox(&self, timeout: Duration) -> Result<bool, Error> {
+    pub(crate) async fn wait_for_inbox(&self, timeout: Duration) -> Result<bool, Error> {
         self.validate()?;
-        imap_io::block_on(async {
-            // The server may stay quiet for the whole wait, so reads may stall that long.
-            let session = self.login(timeout + IO_TIMEOUT).await?;
-            let (changed, mut session) = idle_session(session, timeout).await?;
-            let _ = session.logout().await;
-            Ok(changed)
-        })
+        // The server may stay quiet for the whole wait, so reads may stall that long.
+        let session = self.login(timeout + IO_TIMEOUT).await?;
+        let (changed, mut session) = idle_session(session, timeout).await?;
+        let _ = session.logout().await;
+        Ok(changed)
     }
     /// Fetch one complete message by its Colecto ID without marking it seen.
     pub(crate) fn fetch_raw(&self, id: &str) -> Result<Vec<u8>, Error> {
         self.validate()?;
         let (name, validity, uid) = parse_id(id)?;
-        imap_io::block_on(
+        crate::net::block_on(
             self.with_session(async |session| fetch_session(session, &name, validity, uid).await),
         )
     }
@@ -319,7 +317,7 @@ impl MailAccount {
         max_size: usize,
         found: &mut dyn FnMut(String, Vec<u8>),
     ) -> Result<(), Error> {
-        imap_io::block_on(
+        crate::net::block_on(
             self.with_session(async |session| {
                 fetch_many_session(session, ids, max_size, found).await
             }),
@@ -387,28 +385,31 @@ impl MailAccount {
         } else {
             Tls::Required(parameters)
         };
-        SmtpTransport::builder_dangerous(&self.smtp_host)
-            .tls(tls)
-            .port(self.smtp_port)
-            .timeout(Some(Duration::from_secs(60)))
-            .credentials(Credentials::new(
-                self.username.clone(),
-                self.password.clone(),
-            ))
-            .build()
-            .send(&email)
-            .map_err(smtp_error)?;
-        // SMTP only delivers; the copy in Sent is the client's job. The message has
-        // already gone out, so a failed copy is logged rather than reported as a failed send.
-        if !provider_saves_sent(&self.imap_host)
-            && let Err(error) = self.save_sent(&email.formatted())
-        {
-            tracing::warn!(%error, "Sent message was not copied to the Sent folder");
-        }
-        Ok(())
-    }
-    fn save_sent(&self, raw: &[u8]) -> Result<(), Error> {
-        imap_io::block_on(self.with_session(async |session| save_sent_session(session, raw).await))
+        let raw = email.formatted();
+        crate::net::block_on(async {
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.smtp_host)
+                .tls(tls)
+                .port(self.smtp_port)
+                .timeout(Some(Duration::from_secs(60)))
+                .credentials(Credentials::new(
+                    self.username.clone(),
+                    self.password.clone(),
+                ))
+                .build()
+                .send(email)
+                .await
+                .map_err(smtp_error)?;
+            // SMTP only delivers; the copy in Sent is the client's job. The message has
+            // already gone out, so a failed copy is logged rather than reported as a failed send.
+            if !provider_saves_sent(&self.imap_host)
+                && let Err(error) = self
+                    .with_session(async |session| save_sent_session(session, &raw).await)
+                    .await
+            {
+                tracing::warn!(%error, "Sent message was not copied to the Sent folder");
+            }
+            Ok(())
+        })
     }
 }
 
@@ -961,7 +962,7 @@ mod tests {
     use super::*;
     /// Log in to a scripted plain-text server.
     fn session_at(address: std::net::SocketAddr) -> Session {
-        imap_io::block_on(async {
+        crate::net::block_on(async {
             let stream = tokio::net::TcpStream::connect(address).await.unwrap();
             let mut client = async_imap::Client::new(Box::new(stream) as Box<dyn Io>);
             greeting(&mut client).await.unwrap();
@@ -1010,7 +1011,7 @@ mod tests {
         });
         let mut session = session_at(address);
         for (search, identity) in [("", "imap-7-"), ("needle", "imap-8-")] {
-            let result = imap_io::block_on(query_session_with_identity(
+            let result = crate::net::block_on(query_session_with_identity(
                 &mut session,
                 "inbox",
                 search,
@@ -1087,7 +1088,7 @@ mod tests {
             }
         });
         let mut session = session_at(address);
-        let messages = imap_io::block_on(query_session(&mut session, "sent", "needle")).unwrap();
+        let messages = crate::net::block_on(query_session(&mut session, "sent", "needle")).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].subject, "Needle");
         assert_eq!(messages[0].id, "imap-4f7574626f782061726368697665-7-42");
@@ -1138,7 +1139,7 @@ mod tests {
             write!(socket, "{tag} OK appended\r\n").unwrap();
         });
         let mut session = session_at(address);
-        imap_io::block_on(save_sent_session(&mut session, raw)).unwrap();
+        crate::net::block_on(save_sent_session(&mut session, raw)).unwrap();
         server.join().unwrap();
     }
     #[test]
@@ -1229,7 +1230,7 @@ mod tests {
             ("STATUS \"Outbox\" (MESSAGES UNSEEN)", "* STATUS \"Outbox\" (MESSAGES 12 UNSEEN 3)\r\n".into()),
             ("STATUS \"INBOX\" (MESSAGES UNSEEN)", "* STATUS \"INBOX\" (MESSAGES 20 UNSEEN 7)\r\n".into()),
         ]);
-        let folders = imap_io::block_on(folders_session(&mut mock_session())).unwrap();
+        let folders = crate::net::block_on(folders_session(&mut mock_session())).unwrap();
         assert_eq!(folders.len(), 2);
         assert_eq!(folders[0].role, FolderRole::Sent);
         assert_eq!((folders[0].total, folders[0].unread), (12, 3));
@@ -1281,7 +1282,7 @@ mod tests {
             }
             let server = mock_imap(steps);
             let mut session = mock_session();
-            let result = imap_io::block_on(organize_session(
+            let result = crate::net::block_on(organize_session(
                 &mut session,
                 &[format!(
                     "imap-{}-42",
@@ -1369,7 +1370,7 @@ mod tests {
     }
     fn idle(address: std::net::SocketAddr) -> Result<bool, Error> {
         let session = session_at(address);
-        imap_io::block_on(idle_session(session, Duration::from_millis(400)))
+        crate::net::block_on(idle_session(session, Duration::from_millis(400)))
             .map(|(changed, _)| changed)
     }
     #[test]
@@ -1407,7 +1408,7 @@ mod tests {
         ]);
         let mut session = mock_session();
         let page = |session: &mut Session, offset| {
-            imap_io::block_on(query_session_with_identity(
+            crate::net::block_on(query_session_with_identity(
                 session,
                 "Work",
                 "",
@@ -1463,17 +1464,17 @@ mod tests {
             ),
         ]);
         let mut session = mock_session();
-        let messages = imap_io::block_on(query_session(&mut session, "inbox", "")).unwrap();
+        let messages = crate::net::block_on(query_session(&mut session, "inbox", "")).unwrap();
         assert_eq!(messages[0].subject, "Big");
         assert!(messages[0].seen && messages[0].flagged);
         assert!(messages[0].body.contains("larger than 2 MB"));
         let (name, validity, uid) = parse_id(&messages[0].id).unwrap();
         assert!(matches!(
-            imap_io::block_on(fetch_session(&mut session, &name, validity, uid)),
+            crate::net::block_on(fetch_session(&mut session, &name, validity, uid)),
             Err(Error::Missing)
         ));
         assert_eq!(
-            imap_io::block_on(fetch_session(&mut session, &name, validity, uid)).unwrap(),
+            crate::net::block_on(fetch_session(&mut session, &name, validity, uid)).unwrap(),
             raw.as_bytes()
         );
         server.join().unwrap();
@@ -1508,7 +1509,7 @@ mod tests {
         old.id = "imap-7-1".into();
         let known = std::collections::HashMap::from([(old.id.clone(), old)]);
         let mut steps = Vec::new();
-        let listing = imap_io::block_on(query_session_with_identity(
+        let listing = crate::net::block_on(query_session_with_identity(
             &mut session,
             "inbox",
             "",
@@ -1524,7 +1525,7 @@ mod tests {
         assert!(listing.messages[2].seen);
         assert_eq!(listing.raws.len(), 2);
         let mut found = Vec::new();
-        imap_io::block_on(fetch_many_session(
+        crate::net::block_on(fetch_many_session(
             &mut session,
             &["imap-7-2".into(), "imap-7-1".into()],
             100,
@@ -1698,7 +1699,7 @@ mod tests {
     fn imap_starttls_upgrades_with_a_pinned_certificate_before_login() {
         let (port, server) = starttls_imap("OK begin TLS", PINNED_CERT, PINNED_KEY);
         let account = pinned_account("127.0.0.1", port, 1025, true);
-        imap_io::block_on(account.login(IO_TIMEOUT)).unwrap();
+        crate::net::block_on(account.login(IO_TIMEOUT)).unwrap();
         let lines = server.join().unwrap();
         assert!(lines[0].contains("LOGIN"), "{lines:?}");
     }
@@ -1706,7 +1707,7 @@ mod tests {
     fn imap_never_logs_in_when_starttls_is_refused_or_the_certificate_differs() {
         let (port, server) = starttls_imap("NO not here", PINNED_CERT, PINNED_KEY);
         let error =
-            imap_io::block_on(pinned_account("127.0.0.1", port, 1025, true).login(IO_TIMEOUT))
+            crate::net::block_on(pinned_account("127.0.0.1", port, 1025, true).login(IO_TIMEOUT))
                 .err()
                 .unwrap();
         assert!(error.to_string().contains("STARTTLS"), "{error}");
@@ -1715,7 +1716,7 @@ mod tests {
 
         let (port, server) = starttls_imap("OK begin TLS", OTHER_CERT, OTHER_KEY);
         let error =
-            imap_io::block_on(pinned_account("127.0.0.1", port, 1025, true).login(IO_TIMEOUT))
+            crate::net::block_on(pinned_account("127.0.0.1", port, 1025, true).login(IO_TIMEOUT))
                 .err()
                 .unwrap();
         assert!(
@@ -1748,7 +1749,7 @@ mod tests {
                 true
             });
             let result =
-                imap_io::block_on(pinned_account(host, port, 465, false).login(IO_TIMEOUT));
+                crate::net::block_on(pinned_account(host, port, 465, false).login(IO_TIMEOUT));
             assert_eq!(result.is_ok(), accepted, "{host}");
             assert_eq!(server.join().unwrap(), accepted, "{host}");
         }

@@ -1074,9 +1074,8 @@ impl MailService {
         if let Principal::ApiKey(_) = principal {
             return Err(ServiceError::forbidden());
         }
-        let latest = tokio::task::spawn_blocking(|| releases::latest(VERSION))
+        let latest = releases::latest(VERSION)
             .await
-            .map_err(|_| ServiceError::forbidden())?
             .map_err(ServiceError::bad_gateway)?;
         Ok(ReleaseStatus {
             current: VERSION.to_owned(),
@@ -1329,14 +1328,20 @@ impl MailService {
                 }
             }
             let service = self.clone();
-            let stop = stop.clone();
-            let runtime = tokio::runtime::Handle::current();
-            std::thread::spawn(move || {
+            let mut stop = stop.clone();
+            tokio::spawn(async move {
                 service.inner.sync.set_push(&service.inner, &account, true);
                 while !*stop.borrow() {
-                    match watcher.wait(PUSH_WAIT) {
-                        Ok(true) => runtime
-                            .block_on(service.refresh_until_stopped(stop.clone(), Some(&account))),
+                    let outcome = tokio::select! {
+                        outcome = watcher.wait(PUSH_WAIT) => outcome,
+                        _ = stop.changed() => break,
+                    };
+                    match outcome {
+                        Ok(true) => {
+                            service
+                                .refresh_until_stopped(stop.clone(), Some(&account))
+                                .await
+                        }
                         Ok(false) => {}
                         Err(Error::Invalid(_)) => {
                             if let Ok(mut watching) = service.inner.watching.lock() {
@@ -1349,19 +1354,27 @@ impl MailService {
                             break;
                         }
                     }
-                    let current = service
-                        .inner
-                        .accounts
-                        .lock()
-                        .ok()
-                        .and_then(|accounts| accounts.store(&account).ok())
-                        .and_then(|store| store.lock().ok().and_then(|s| s.push_watcher()));
+                    // The store's lock can be held by blocking storage work, so it is only
+                    // taken on a blocking thread.
+                    let (inner, id) = (service.inner.clone(), account.clone());
+                    let current = tokio::task::spawn_blocking(move || {
+                        inner
+                            .accounts
+                            .lock()
+                            .ok()
+                            .and_then(|accounts| accounts.store(&id).ok())
+                            .and_then(|store| store.lock().ok().and_then(|s| s.push_watcher()))
+                            .map(|watcher| watcher.key().to_owned())
+                    })
+                    .await
+                    .ok()
+                    .flatten();
                     let enabled = service
                         .inner
                         .preferences
                         .lock()
                         .is_ok_and(|p| p.get().account_enabled(&account));
-                    if !enabled || current.is_none_or(|current| current.key() != watcher.key()) {
+                    if !enabled || current.is_none_or(|key| key != watcher.key()) {
                         break;
                     }
                 }

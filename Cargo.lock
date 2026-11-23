@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "colecto-core"
-version = "0.11.8"
+version = "0.12.0"
 dependencies = [
  "ammonia",
  "argon2",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "colecto-daemon"
-version = "0.11.8"
+version = "0.12.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "colecto-ffi"
-version = "0.11.8"
+version = "0.12.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "colecto-service"
-version = "0.11.8"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "colecto-core",

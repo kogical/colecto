@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
+
 import '../../domain/models/account_models.dart';
 import '../../domain/models/ai_models.dart';
 import '../../domain/models/automation_models.dart';
@@ -201,6 +203,16 @@ class InMemoryMailBackend implements MailBackend {
           flagged: false,
           thread: 't-bookclub',
         ),
+        for (final e in _demoHtmlEmails)
+          MailMessage(
+            id: e.id,
+            sender: e.sender,
+            address: e.address,
+            subject: e.subject,
+            body: e.preview,
+            date: now.subtract(e.age).toIso8601String(),
+            thread: 't-${e.id}',
+          ),
       ],
       'sent': [
         MailMessage(
@@ -219,6 +231,9 @@ class InMemoryMailBackend implements MailBackend {
       'trash': [],
       'junk': [],
     };
+
+    // Newest first, like a real inbox (ISO-8601 dates sort as text).
+    _mailboxes['demo']!['inbox']!.sort((a, b) => b.date.compareTo(a.date));
 
     _contents['demo'] = {
       'm1': const MessageContent(
@@ -731,6 +746,19 @@ class InMemoryMailBackend implements MailBackend {
     bool cached = false,
     bool? remoteImages,
   }) async {
+    final demo = account == 'demo'
+        ? _demoHtmlEmails.where((e) => e.id == id).firstOrNull
+        : null;
+    if (demo != null) {
+      final allowRemote = remoteImages ?? _preferences.remoteImages;
+      return MessageContent(
+        text: demo.preview,
+        html: await rootBundle.loadString('assets/demo/emails/${demo.file}'),
+        blockedRemoteImages: allowRemote ? 0 : demo.remoteImages,
+        messageId: '<${demo.id}@demo.colecto.local>',
+        to: 'demo@colecto.local',
+      );
+    }
     final content = _contents[account]?[id];
     if (content != null) {
       final allowRemote = remoteImages ?? _preferences.remoteImages;
@@ -1114,3 +1142,71 @@ class InMemoryMailBackend implements MailBackend {
     _events.close();
   }
 }
+
+/// Real-world-style HTML emails for the demo inbox, from
+/// `assets/demo/emails/` (also the Rust sanitizer's test fixtures). Demo mode
+/// shows them unsanitized, so they carry no scripts; their remote images use
+/// reserved `.example` hosts that never resolve.
+typedef _DemoHtmlEmail = ({
+  String id,
+  String file,
+  String sender,
+  String address,
+  String subject,
+  String preview,
+  Duration age,
+  int remoteImages,
+});
+
+const List<_DemoHtmlEmail> _demoHtmlEmails = [
+  (
+    id: 'html-verify',
+    file: 'verify-email.html',
+    sender: 'Northwind',
+    address: 'no-reply@northwind.example',
+    subject: 'Confirm your email',
+    preview: 'Confirm your email to finish setting up Northwind.',
+    age: Duration(minutes: 41),
+    remoteImages: 2,
+  ),
+  (
+    id: 'html-ci',
+    file: 'ci-run-failed.html',
+    sender: 'Forge',
+    address: 'notifications@forge.example',
+    subject: '[orbit-labs/orbit] Run failed: Release - v2.8.1 (a41c9e0)',
+    preview: 'Run failed: Release – v2.8.1 (a41c9e0). 1 failed, 4 passed, 1 skipped.',
+    age: Duration(hours: 3),
+    remoteImages: 1,
+  ),
+  (
+    id: 'html-security',
+    file: 'security-alert.html',
+    sender: 'Quill Accounts',
+    address: 'no-reply@accounts.quillmail.example',
+    subject: 'New sign-in to your account',
+    preview: 'New sign-in on Linux from Kraków, Poland. Was this you?',
+    age: Duration(hours: 5),
+    remoteImages: 1,
+  ),
+  (
+    id: 'html-receipt',
+    file: 'order-receipt.html',
+    sender: 'Fernleaf Supply',
+    address: 'orders@fernleaf.example',
+    subject: 'Your order FL-48213 has shipped',
+    preview: 'Order FL-48213 is on its way — arriving Tuesday.',
+    age: Duration(days: 1, hours: 6),
+    remoteImages: 5,
+  ),
+  (
+    id: 'html-newsletter',
+    file: 'newsletter.html',
+    sender: 'The Field Notes',
+    address: 'letters@fieldnotes.example',
+    subject: 'Issue 42: The quiet return of the hedgerow',
+    preview: 'This week: the quiet return of the hedgerow, a field guide to lichens, and why your sourdough hates winter.',
+    age: Duration(days: 2, hours: 2),
+    remoteImages: 2,
+  ),
+];

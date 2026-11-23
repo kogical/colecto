@@ -1,0 +1,27 @@
+name: kogi_webview
+description: >-
+  Live WebKitGTK views composited under Flutter on Linux (Wayland and X11),
+  with clipping, scrolling, selection, links and popups that behave like
+  ordinary Flutter content.
+version: 0.1.0
+repository: https://github.com/kogical/colecto/tree/develop/packages/kogi_webview
+publish_to: none
+
+environment:
+  sdk: ^3.14.0
+  flutter: ">=3.50.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      linux:
+        pluginClass: KogiWebviewPlugin

@@ -52,7 +52,7 @@ Reference checkout: `github.com/kogical/colecto` (`origin/develop`).
 
 ### Ported and Cleaned Up
 - **`crates/colecto-core/`** (from `colecto-core`):
-  - `accounts.rs`, `cache.rs`, `content.rs`, `credentials.rs`, `database.rs`, `jmap.rs`, `labels.rs`, `lib.rs`, `mime.rs`, `remote.rs`, `search.rs`, plus `types.rs` (inlined domain structs), `html.rs` (`ammonia` sanitizer with remote-image blocking and `cid:` resolution), and `threading.rs`.
+  - `accounts.rs`, `cache.rs`, `content.rs`, `credentials.rs`, `database.rs`, `net.rs` (the Tokio runtime every network transport runs on), `imap_io.rs` (IMAP socket timeouts and the per-account session pool), `jmap.rs`, `labels.rs`, `lib.rs`, `mime.rs`, `remote.rs`, `search.rs`, plus `types.rs` (inlined domain structs), `html.rs` (`ammonia` sanitizer with remote-image blocking and `cid:` resolution), and `threading.rs`.
   - Consolidated `migrations/0001_initial.sql` for `colecto.db` including `ai_summaries` and `ai_autolabel_seen`.
 - **`crates/colecto-service/`** (from non-extension `colecto-host` + native AI service):
   - `lib.rs` (`MailService`), `error.rs`, `events.rs`, `sync.rs`, `discovery.rs`, `ai.rs` (combining host AI + native auto-label/reclassify without Wasm), `api_keys.rs`, `approvals.rs`, `notifications.rs`, `preferences.rs`, `settings.rs`, `secrets.rs`, `store.rs`, `logging.rs`, `releases.rs`.
@@ -67,7 +67,7 @@ Reference checkout: `github.com/kogical/colecto` (`origin/develop`).
 - The entire `ui/` Svelte codebase.
 
 ### Mobile Cross-Compilation Notes
-- **TLS:** `colecto-core` currently uses `native-tls` (`imap`, `lettre`, `reqwest`). Evaluate switching to `rustls` if OpenSSL cross-compilation causes friction on Android/iOS targets.
+- **TLS:** `colecto-core` currently uses `native-tls` (`async-imap` through `tokio-native-tls`, `lettre`, `reqwest`). Evaluate switching to `rustls` if OpenSSL cross-compilation causes friction on Android/iOS targets.
 - **Keychain / Keystore:** OS secret storage is behind `colecto_core::SecretStore` so desktop uses OS keyring while Android/iOS can plug into Android Keystore / iOS Keychain cleanly.
 
 ## Backend Modes
@@ -133,4 +133,5 @@ What else is needed to run the daemon in Docker:
   1. Rust sanitizes the HTML (strips `<script>`, forms, unsafe handlers; blocks remote images by default unless allowed per-sender or in Privacy settings; resolves `cid:` inline images).
   2. Flutter renders the sanitized HTML in a **single lazy/pooled sandboxed WebView** that mounts only when an HTML message is open and releases/reuses when closed.
   3. On **Web (Wasm)**, render in a real `<iframe sandbox>` via Flutter's `HtmlElementView`.
+     On **Linux**, a live WebKitGTK view from `packages/kogi_webview` is composited *under* Flutter and shows through a transparent hole in Flutter's frame, so it scrolls with the reader, clips under the toolbar and sits beneath dialogs and menus; page scripts are off and network loads are blocked unless the owner loads remote images ([decision](decisions.md#linux-html-email-webkitgtk-through-a-hole-in-flutter-kogi_webview)).
   4. External links (`http`, `https`, `mailto`) are intercepted and opened via the OS browser / mail handler, never inside the embedded WebView.

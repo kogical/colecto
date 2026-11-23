@@ -1,20 +1,20 @@
-import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:kogi_webview/kogi_webview.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../data/platform/file_io.dart';
+import '../kit/kit.dart';
 import 'html_message_document.dart';
-
-const _linuxWebViewChannel = MethodChannel('com.kogical.colecto/webview');
 
 /// Builds a lazy, sandboxed platform WebView for HTML email on Desktop and
 /// Mobile (`AGENTS.md` rule 5):
-/// - **Linux:** First-party ephemeral WebKitGTK 4.1 (`webkit2gtk-4.1`) with
-///   JavaScript disabled and external link interception.
+/// - **Linux:** a live WebKitGTK view from `packages/kogi_webview`, shown
+///   through a hole in Flutter's frame so it scrolls, clips and sits under
+///   dialogs like Flutter content. JavaScript and network loads are off.
 /// - **Windows / macOS / Android / iOS:** Native OS WebView via
 ///   `flutter_inappwebview` (WebView2 / WKWebView / Android WebView) with
 ///   JavaScript disabled and external link interception.
@@ -28,9 +28,9 @@ Widget? buildPlatformSandboxedWebView({
   required String bg,
   required double height,
   required Widget fallback,
+  bool allowRemoteContent = false,
   ValueChanged<String>? onOpenUrl,
 }) {
-  if (kIsWeb) return null;
   final document = buildSandboxedEmailDocument(
     sanitizedHtml,
     designed: designed,
@@ -39,13 +39,13 @@ Widget? buildPlatformSandboxedWebView({
     bg: bg,
   );
   if (Platform.isLinux) {
-    return _LinuxWebKitHtmlView(
+    return _LinuxHtmlView(
       document: document,
-      designed: designed,
-      bg: designed ? '#ffffff' : bg,
-      height: height,
+      background: designed ? const Color(0xFFFFFFFF) : _parseHex(bg),
+      frameHeight: height,
+      allowRemoteContent: allowRemoteContent,
       fallback: fallback,
-      onOpenUrl: onOpenUrl,
+      onOpenUrl: onOpenUrl ?? openExternalUrl,
     );
   }
   if (Platform.isWindows ||
@@ -63,174 +63,103 @@ Widget? buildPlatformSandboxedWebView({
   return fallback;
 }
 
-/// Linux WebKitGTK 4.1 host widget synced to the native `GtkOverlay` child.
-///
-/// Automatically hides the overlay whenever another route (Settings, Command
-/// Palette, dialogs, menus) is pushed above the reader, and destroys the
-/// WebKitGTK instance on [dispose] so zero WebView RAM stays alive when no
-/// HTML email is open.
-class _LinuxWebKitHtmlView extends StatefulWidget {
-  const _LinuxWebKitHtmlView({
+Color _parseHex(String hex) {
+  final v = int.tryParse(hex.replaceFirst('#', ''), radix: 16) ?? 0;
+  return Color(hex.length <= 7 ? 0xFF000000 | v : v);
+}
+
+/// Linux: the message sized to its content so it scrolls with the reader.
+/// Very tall messages get the reader's frame height and scroll inside it, so
+/// the native view never grows past what WebKit can paint cheaply.
+class _LinuxHtmlView extends StatefulWidget {
+  const _LinuxHtmlView({
     required this.document,
-    required this.designed,
-    required this.bg,
-    required this.height,
+    required this.background,
+    required this.frameHeight,
+    required this.allowRemoteContent,
     required this.fallback,
-    this.onOpenUrl,
+    required this.onOpenUrl,
   });
 
   final String document;
-  final bool designed;
-  final String bg;
-  final double height;
+  final Color background;
+  final double frameHeight;
+  final bool allowRemoteContent;
   final Widget fallback;
-  final ValueChanged<String>? onOpenUrl;
+  final ValueChanged<String> onOpenUrl;
 
   @override
-  State<_LinuxWebKitHtmlView> createState() => _LinuxWebKitHtmlViewState();
+  State<_LinuxHtmlView> createState() => _LinuxHtmlViewState();
 }
 
-class _LinuxWebKitHtmlViewState extends State<_LinuxWebKitHtmlView>
-    with WidgetsBindingObserver {
-  final _slotKey = GlobalKey();
-  ScrollPosition? _scrollPosition;
-  bool _pluginMissing = false;
-  bool _loaded = false;
-  Rect? _lastRect;
-  bool _lastVisible = false;
+class _LinuxHtmlViewState extends State<_LinuxHtmlView> {
+  static const _maxContentHeight = 12000.0;
+  static const _minHeight = 48.0;
+
+  double? _contentHeight;
+  bool _unavailable = !KogiWebView.isPlatformSupported;
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _linuxWebViewChannel.setMethodCallHandler(_handleNativeCall);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _sync(reload: true));
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final nextPos = Scrollable.maybeOf(context)?.position;
-    if (nextPos != _scrollPosition) {
-      _scrollPosition?.removeListener(_onScroll);
-      _scrollPosition = nextPos;
-      _scrollPosition?.addListener(_onScroll);
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _sync(reload: false));
-  }
-
-  @override
-  void didUpdateWidget(_LinuxWebKitHtmlView old) {
+  void didUpdateWidget(_LinuxHtmlView old) {
     super.didUpdateWidget(old);
-    final changed = old.document != widget.document || old.bg != widget.bg;
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _sync(reload: changed || !_loaded),
+    if (old.document != widget.document) _contentHeight = null;
+  }
+
+  void _menu(KogiWebViewContextMenu m) {
+    final link = m.link;
+    showColectoContextMenu(
+      context: context,
+      globalPosition: m.globalPosition,
+      items: [
+        if (m.hasSelection)
+          ColectoMenuItem(
+            label: 'Copy',
+            icon: LucideIcons.copy,
+            onSelected: m.copySelection,
+          ),
+        if (link != null) ...[
+          ColectoMenuItem(
+            label: 'Open link',
+            icon: LucideIcons.externalLink,
+            onSelected: () => widget.onOpenUrl(link),
+          ),
+          ColectoMenuItem(
+            label: 'Copy link',
+            icon: LucideIcons.link,
+            onSelected: () => Clipboard.setData(ClipboardData(text: link)),
+          ),
+        ],
+      ],
     );
   }
 
   @override
-  void didChangeMetrics() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _sync(reload: false));
-  }
-
-  void _onScroll() {
-    _sync(reload: false);
-  }
-
-  Future<dynamic> _handleNativeCall(MethodCall call) async {
-    if (call.method == 'openUrl' && call.arguments is String) {
-      final url = call.arguments as String;
-      (widget.onOpenUrl ?? openExternalUrl)(url);
-    }
-    return null;
-  }
-
-  @override
-  void dispose() {
-    _scrollPosition?.removeListener(_onScroll);
-    WidgetsBinding.instance.removeObserver(this);
-    _linuxWebViewChannel.setMethodCallHandler(null);
-    if (!_pluginMissing) {
-      unawaited(
-        _linuxWebViewChannel.invokeMethod<void>('dispose').catchError((_) {}),
-      );
-    }
-    super.dispose();
-  }
-
-  Rect? _measureVisibleRect() {
-    final renderBox = _slotKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox == null || !renderBox.hasSize || !renderBox.attached) {
-      return null;
-    }
-    final topLeft = renderBox.localToGlobal(Offset.zero);
-    var rect = topLeft & renderBox.size;
-
-    // Clip to the enclosing Scrollable's viewport so the GTK overlay never
-    // overlaps the sticky reader toolbar or top bar.
-    final scrollBox =
-        Scrollable.maybeOf(context)?.context.findRenderObject() as RenderBox?;
-    if (scrollBox != null && scrollBox.hasSize && scrollBox.attached) {
-      final clip = scrollBox.localToGlobal(Offset.zero) & scrollBox.size;
-      rect = rect.intersect(clip);
-    }
-    if (rect.width <= 1 || rect.height <= 1) return null;
-    return rect;
-  }
-
-  Future<void> _sync({required bool reload}) async {
-    if (!mounted || _pluginMissing) return;
-    final routeCurrent = ModalRoute.of(context)?.isCurrent ?? true;
-    final rect = routeCurrent ? _measureVisibleRect() : null;
-    final visible = routeCurrent && rect != null;
-
-    try {
-      if (reload) {
-        _loaded = true;
-        _lastRect = rect;
-        _lastVisible = visible;
-        final ok = await _linuxWebViewChannel.invokeMethod<bool>('loadHtml', {
-          'html': widget.document,
-          'bg': widget.bg,
-          'x': rect?.left.round() ?? 0,
-          'y': rect?.top.round() ?? 0,
-          'width': rect?.width.round() ?? 0,
-          'height': rect?.height.round() ?? 0,
-          'visible': visible,
-        });
-        if (ok != true && mounted) {
-          setState(() => _pluginMissing = true);
-        }
-      } else if (visible != _lastVisible || rect != _lastRect) {
-        _lastRect = rect;
-        _lastVisible = visible;
-        await _linuxWebViewChannel.invokeMethod<void>('updateRect', {
-          'x': rect?.left.round() ?? 0,
-          'y': rect?.top.round() ?? 0,
-          'width': rect?.width.round() ?? 0,
-          'height': rect?.height.round() ?? 0,
-          'visible': visible,
-        });
-      }
-    } on MissingPluginException {
-      if (mounted) setState(() => _pluginMissing = true);
-    } catch (_) {}
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_pluginMissing) return widget.fallback;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(widget.designed ? 8 : 0),
-      child: ColoredBox(
-        color: widget.designed
-            ? const Color(0xFFFFFFFF)
-            : const Color(0x00000000),
-        child: SizedBox(
-          key: _slotKey,
-          width: double.infinity,
-          height: widget.height,
-        ),
+    // Without the native view (tests, a runner without the overlay) the
+    // Flutter renderer lays out at its natural height.
+    if (_unavailable) return widget.fallback;
+    final content = _contentHeight;
+    final tall = content != null && content > _maxContentHeight;
+    final height = content == null || tall
+        ? widget.frameHeight
+        : content.clamp(_minHeight, _maxContentHeight);
+    return SizedBox(
+      height: height,
+      child: KogiWebView(
+        html: widget.document,
+        background: widget.background,
+        blockNetwork: !widget.allowRemoteContent,
+        scrollsInternally: tall,
+        onContentHeight: (h) {
+          if (mounted && h != _contentHeight) {
+            setState(() => _contentHeight = h);
+          }
+        },
+        onLinkTap: widget.onOpenUrl,
+        onContextMenu: _menu,
+        onUnavailable: () {
+          if (mounted) setState(() => _unavailable = true);
+        },
       ),
     );
   }

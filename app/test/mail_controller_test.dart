@@ -8,6 +8,8 @@ import 'package:colecto/ui/core/theme/colecto_palette.dart';
 import 'package:colecto/ui/features/shell/mail_controller.dart';
 
 void main() {
+  // The demo backend reads its HTML emails from the asset bundle.
+  TestWidgetsFlutterBinding.ensureInitialized();
   group('MailController integration', () {
     late MailController controller;
 

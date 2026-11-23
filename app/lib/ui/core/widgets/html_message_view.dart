@@ -9,7 +9,8 @@ import 'html_message_webview_stub.dart'
 
 /// Displays Rust-sanitized HTML email (`AGENTS.md` rule 5):
 /// - On Web, inside a real `<iframe sandbox>` via `HtmlElementView`.
-/// - On Linux, inside a lazy ephemeral WebKitGTK 4.1 WebView (JS disabled).
+/// - On Linux, inside a live WebKitGTK view from `packages/kogi_webview`
+///   composited under Flutter (JS and, unless allowed, network loads off).
 /// - On Windows/macOS/Android/iOS, inside a lazy `InAppWebView` (JS disabled).
 /// - In headless widget tests (or when no platform WebView is available), falls
 ///   back cleanly to [NativeSanitizedHtmlView].
@@ -19,12 +20,17 @@ class HtmlMessageView extends StatelessWidget {
     required this.html,
     required this.plainTextFallback,
     required this.height,
+    this.allowRemoteContent = false,
     this.onOpenUrl,
   });
 
   final String html;
   final String plainTextFallback;
   final double height;
+
+  /// The owner chose to load remote images for this message; WebViews that
+  /// can block network loads (Linux) otherwise block them all.
+  final bool allowRemoteContent;
   final ValueChanged<String>? onOpenUrl;
 
   static final _styleTagPattern = RegExp(r'<style\b', caseSensitive: false);
@@ -85,6 +91,7 @@ class HtmlMessageView extends StatelessWidget {
       bg: bg,
       height: height,
       fallback: fallback,
+      allowRemoteContent: allowRemoteContent,
       onOpenUrl: onOpenUrl,
     );
     return webView ?? fallback;

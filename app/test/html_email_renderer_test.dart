@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io' show zlib;
+import 'dart:io' show Platform, zlib;
 import 'dart:typed_data';
 
 import 'package:colecto/ui/core/theme/colecto_palette.dart';
@@ -557,15 +557,17 @@ void main() {
     );
 
     testWidgets(
-      'Linux WebKitGTK channel loads sanitized document and disposes on unmount',
+      'Linux kogi_webview loads the sanitized document offline and disposes on unmount',
+      skip: !Platform.isLinux,
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
       (tester) async {
-        const channel = MethodChannel('com.kogical.colecto/webview');
+        const channel = MethodChannel('kogi_webview');
         final calls = <MethodCall>[];
         tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
           channel,
           (call) async {
             calls.add(call);
-            return call.method == 'loadHtml' ? true : null;
+            return call.method == 'create' ? {'wayland': true} : null;
           },
         );
         addTearDown(
@@ -582,15 +584,17 @@ void main() {
           expectNativeFallback: false,
         );
 
-        expect(calls.any((c) => c.method == 'loadHtml'), isTrue);
+        await tester.pump();
         final loadArgs =
-            calls.firstWhere((c) => c.method == 'loadHtml').arguments
+            calls.firstWhere((c) => c.method == 'load').arguments
                 as Map<Object?, Object?>;
         expect(
           loadArgs['html'],
           contains('<style>.preheader{display:none}</style>'),
         );
-        expect(loadArgs['bg'], '#ffffff');
+        // A designed email keeps its white sheet, and nothing is fetched.
+        expect(loadArgs['background'], 0xFFFFFFFF);
+        expect(loadArgs['blockNetwork'], isTrue);
 
         // Unmounting the reader destroys the native WebKitGTK view (0 idle RAM).
         await tester.pumpWidget(const SizedBox.shrink());

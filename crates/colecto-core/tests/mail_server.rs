@@ -39,13 +39,26 @@ fn create_folder(user: &str, certificate: &str, name: &str) {
         .add_root_certificate(native_tls::Certificate::from_pem(certificate.as_bytes()).unwrap())
         .build()
         .unwrap();
-    let client = imap::connect(("localhost", IMAP_PORT), "localhost", &tls).unwrap();
-    let mut session = client
-        .login(format!("{user}@example.com"), "password")
-        .map_err(|(error, _)| error)
-        .unwrap();
-    session.create(name).unwrap();
-    session.logout().unwrap();
+    let tls = tokio_native_tls::TlsConnector::from(tls);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let socket = tokio::net::TcpStream::connect(("localhost", IMAP_PORT))
+                .await
+                .unwrap();
+            let stream = tls.connect("localhost", socket).await.unwrap();
+            let mut client = async_imap::Client::new(stream);
+            client.read_response().await.unwrap();
+            let mut session = client
+                .login(format!("{user}@example.com"), "password")
+                .await
+                .map_err(|(error, _)| error)
+                .unwrap();
+            session.create(name).await.unwrap();
+            session.logout().await.unwrap();
+        });
 }
 
 fn message(subject: &str) -> DraftInput {
@@ -155,4 +168,26 @@ fn rejects_a_certificate_it_was_not_told_to_trust() {
     store.connect_account(settings("user1", "")).unwrap();
     // The server's certificate is self-signed, so without pinning it TLS must fail.
     assert!(store.query("inbox", "").is_err());
+}
+
+#[test]
+fn push_wakes_on_new_mail_from_any_runtime() {
+    let Some(certificate) = certificate() else {
+        return;
+    };
+    let (_two, recipient) = account("user2", &certificate);
+    let watcher = recipient.push_watcher().unwrap();
+    // The service waits on its own runtime, not the one the transports use.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let waiting = runtime.spawn(async move { watcher.wait(Duration::from_secs(20)).await });
+    std::thread::sleep(Duration::from_secs(2));
+    let (_one, mut sender) = account("user1", &certificate);
+    let mut draft = message(&unique("Push"));
+    draft.recipient = "user2@example.com".into();
+    sender.send(draft).unwrap();
+    assert!(runtime.block_on(waiting).unwrap().unwrap());
 }

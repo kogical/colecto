@@ -333,6 +333,8 @@ pub(crate) fn html_text(html: &str) -> String {
             "</style>"
         } else if tag.starts_with("<script") {
             "</script>"
+        } else if tag.starts_with("<title") {
+            "</title>"
         } else if tag.starts_with("<!--") {
             "-->"
         } else {
@@ -358,13 +360,7 @@ pub(crate) fn html_text(html: &str) -> String {
         }
     }
     text.push_str(&html[at..]);
-    let text = text
-        .replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&");
+    let text = decode_entities(&text);
     let mut out = String::new();
     let mut blank = 0;
     for line in text.lines() {
@@ -379,6 +375,66 @@ pub(crate) fn html_text(html: &str) -> String {
         blank = 0;
         out.push_str(&line);
     }
+    out
+}
+
+/// Decodes numeric (`&#8202;`, `&#x200C;`) and HTML5 named entities, and
+/// drops the invisible characters senders pad preheaders with (zero-width
+/// joiners, soft hyphens, combining grapheme joiners, BOMs) so they never
+/// reach a preview as literal `&#8202;` or as invisible noise.
+fn decode_entities(text: &str) -> String {
+    // The full HTML5 table (`eacute;`, `zwnj;`, …); a few map to two chars.
+    fn named(name: &str) -> Option<String> {
+        let (a, b) = *markup5ever::data::NAMED_ENTITIES.get(&*format!("{name};"))?;
+        Some(
+            [a, b]
+                .into_iter()
+                .filter(|&c| c != 0)
+                .filter_map(char::from_u32)
+                .collect(),
+        )
+    }
+    fn invisible(c: char) -> bool {
+        matches!(
+            c,
+            '\u{00AD}' | '\u{034F}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
+        )
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let decoded = rest[1..]
+            .find(';')
+            .filter(|&end| end <= 32)
+            .and_then(|end| {
+                let body = &rest[1..=end];
+                let c = if let Some(num) = body.strip_prefix('#') {
+                    let code = match num.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => num.parse().ok(),
+                    };
+                    code.and_then(char::from_u32).map(String::from)
+                } else {
+                    named(body)
+                };
+                c.map(|c| (c, end + 2))
+            });
+        match decoded {
+            Some((c, len)) => {
+                out.push_str(&c);
+                rest = &rest[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out.retain(|c| !invisible(c));
     out
 }
 
@@ -446,6 +502,17 @@ mod tests {
         assert_eq!(
             html_text("<script>x<y</script><div>One &amp; two</div><p>Three</p><!-- <p>no</p> -->"),
             "One & two\n\nThree"
+        );
+    }
+
+    #[test]
+    fn html_text_decodes_entities_and_drops_preheader_padding() {
+        assert_eq!(
+            html_text(
+                "<title>Ignored</title><div>Confirm&#8202;&zwnj;&#8202;&zwnj; your email&nbsp;&#847;&#xFEFF;</div>\
+                 <p>Caf&eacute; &amp; &#x2014; &rsquo;s &unknown; & done</p>"
+            ),
+            "Confirm your email\n\nCaf\u{e9} & \u{2014} \u{2019}s &unknown; & done"
         );
     }
 }
